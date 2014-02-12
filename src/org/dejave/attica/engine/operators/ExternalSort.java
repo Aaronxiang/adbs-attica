@@ -22,6 +22,7 @@ import org.dejave.attica.storage.RelationIOManager;
 import org.dejave.attica.storage.StorageManager;
 import org.dejave.attica.storage.StorageManagerException;
 import org.dejave.attica.storage.Tuple;
+import org.dejave.attica.storage.TupleIdentifier;
 
 /**
  * ExternalSort: Your implementation of sorting.
@@ -29,6 +30,23 @@ import org.dejave.attica.storage.Tuple;
  * @author sviglas
  */
 public class ExternalSort extends UnaryOperator {
+	private static class TupleComparator {
+		private int [] slots;
+		
+		public TupleComparator(int [] slots) {
+			this.slots = slots;
+		}
+		
+		public int compare(Tuple first, Tuple second) {
+			for (int i = 0; i < slots.length; ++i) {
+				int ret = first.getValue(slots[i]).compareTo(second.getValue(slots[i]));
+				if ()
+			}
+			
+			return 
+		}
+	}
+	
 	private class PagedHeap {
 		int tuplesNoPerPage = 0;
 		int heapCapacity = 0;
@@ -65,6 +83,7 @@ public class ExternalSort extends UnaryOperator {
 				for (Tuple inTuple : tuples) {
 					heapMan.insertTuple(inTuple);
 					heapSize++;
+					//we can't read more than fits into the buffer
 					if (heapSize >= heapCapacity) 
 						break;
 				}
@@ -81,6 +100,53 @@ public class ExternalSort extends UnaryOperator {
 			catch (Exception sme) {
 				throw new EngineException("Couldn't initialize the heap-file", sme);
 			}
+		}
+		
+		public void buildHeap() {
+		}
+		
+		public void heapify(int tupleIndex, TupleComparator comparator) {
+			int left = leftChildIdx(tupleIndex);
+			int rightTupleIdx = rightChildIdx(tupleIndex);
+			int extremeIdx = tupleIndex;
+			if (leftTupleIdx < heapSize && 
+					comparator.compare(tupleAt(leftTupleIdx), tupleAt(extremeIdx)) {
+				extremeIdx = leftTupleIdx;
+			}
+			if (rightTupleIdx < heapSize &&
+					comparator.compare(tupleAt(rightTupleIdx), tupleAt(extremeIdx)) {
+				extremeIdx = rightTupleIdx;
+			}
+			
+			if (extremeIdx != tupleIndex) {//the parent node didn't fulfill the max/min-heap property - go deeper
+				//swap places with the largest of the children
+				swapTuples(extremeIdx, tupleIndex);
+				
+				//it may be the case that old parent, pushed to the botton, is still smaller thant its new children
+				heapify(extremeIdx, comparator);
+			}
+		}
+		
+		//Move it to HEAP class
+		/**
+		 * Returns parent index, given index of node in question
+		 */
+		public int parentIdx(int nodeIdx) {
+			return ((nodeIdx - 1) / 2);
+		}
+		
+		/**
+		 * Returns index of the left child of node in question
+		 */
+		public int leftChildIdx(int nodeIdx) {
+			return (2 * nodeIdx + 1);
+		}
+
+		/**
+		 * Returns index of the right child of node in question
+		 */
+		public int rightChildIdx(int nodeIdx) {
+			return (2 * nodeIdx + 2);
 		}
 	}
 
@@ -236,6 +302,85 @@ public class ExternalSort extends UnaryOperator {
 			 * 
 			 */
 
+			
+			/** ANOTHER CLASSES
+			 * 
+			 *  go through the algorithm
+			 *  
+			 *  Two versions - 
+			 *  	1st - standar extern merge-sort;
+			 *  	2nd - replacement selection;
+			 *  
+			 *  Straightforward version of the algorithm:
+			 *  - open that file, access it via pages(). At some time there will be continous access to pages. Length of array
+			 *  should be as many as pages;
+			 *  
+			 *  int B = buffers;
+			 *  Page pages[] = new Pages[B];
+			 *  
+			 *  man = new RelationIOManager();
+			 *  int counter = 0;
+			 *  for (Page p : man.pages()) {
+			 *  	pages[counter++] = p;
+			 *  	if (counter == B) {//all pages that fit in buffer are read
+			 *  		//sort pages [0..B-1]
+			 *  		int rpp = Page.SIZE / TupleIOManager.buteSize(pages[0].getTuple[0]);//no of records per page
+			 *  		int N = B * rpp;//no of tuples that are read into memory
+			 *  		
+			 *  		//access the array
+			 *  		int pageOffset = j / rpp;
+			 *  		int tupleOffset = j % rpp;
+			 *  	
+			 *  		//apply main memory sort
+			 *  
+			 *  		//keep track of files
+			 *  		listOfFiles.add(FileUtils.createTempFile());
+			 *  		RelationalIOManager relMan = 
+			 *  			new RelationalIOManager(getStorageManager(), rel, listOfFiles.get(listOfFiles.size() - 1);
+			 *  		//iterate over sorted array and output them
+			 *  		relMan.insertTuples(...);
+			 *  
+			 *  		counter = 0;
+			 *  	}
+			 *  	//ended up with sorted runs on disk and list of fileNames with all those runs
+			 *  
+			 *  	//merge runs
+			 *  	//if we merge fewer thatn B runs, it's a final run
+			 *  	
+			 *  	while (listOfFiles.size() > B) {//or !listOfFiles.empty()
+			 *  		if (listOfFileNames.szie() < B) {//final output
+			 *  			RelationalIOManager relMan = 
+			 *  				new RelationalIOManager(getStorageManager(), ..., outputFile);
+			 *  		}
+			 *  		else {//another run
+			 *  			String tmpFileName = FileUtils.createTempFileName();
+			 *  			runs.add(tmpFileName);
+			 *  			RelationalIOManager relMan = 
+			 *  				new RelationalIOManager(getStorageManager(), ..., tmpFileName);
+			 *  			
+			 * 			
+			 *  		}
+			 *  
+			 *  		//instantiate as many relIOmanagers as files to merge
+			 *  		//have B iterators over them, tuples
+			 *  		//read tuples
+			 *  		//find minimum iteartor, write it to output and advance only this one
+			 *  
+			 *  		//instaad to array - create a heap
+			 *  
+			 *  		//delete B file names from the beginning of the list
+			 *  	}
+			 *  }
+			 *  
+			 *  
+			 *  Not straightforward
+			 *  Array of pages - use the same technique of taking index and turning into offsets - turn into a heap - replacement selection
+			 *  //keep a counter that acts as a division point between two heaps
+			 *  
+			 *  Another implementation - priority queues for queues but ensuring we don't exceed the N number
+			 *  Timings - if example schema used - sorting 1 million records, 50 buffer per pages, 1 sort -> 10 - 15 seconds
+			 *  
+			 */
 			////////////////////////////////////////////
 
 
