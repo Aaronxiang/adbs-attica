@@ -10,8 +10,9 @@
  */
 package org.dejave.attica.engine.operators;
 
-import java.io.IOException;
+import java.util.AbstractList;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 
@@ -22,7 +23,6 @@ import org.dejave.attica.storage.RelationIOManager;
 import org.dejave.attica.storage.StorageManager;
 import org.dejave.attica.storage.StorageManagerException;
 import org.dejave.attica.storage.Tuple;
-import org.dejave.attica.storage.TupleIdentifier;
 
 /**
  * ExternalSort: Your implementation of sorting.
@@ -30,7 +30,13 @@ import org.dejave.attica.storage.TupleIdentifier;
  * @author sviglas
  */
 public class ExternalSort extends UnaryOperator {
-	private static class TupleComparator {
+
+	/**
+	 * Class that takes care of comparing tuples.
+	 * @author krzys
+	 *
+	 */
+	private static class TupleComparator implements Comparator<Tuple> {
 		private int [] slots;
 		
 		public TupleComparator(int [] slots) {
@@ -38,24 +44,31 @@ public class ExternalSort extends UnaryOperator {
 		}
 		
 		public int compare(Tuple first, Tuple second) {
+			int ret = 0;
 			for (int i = 0; i < slots.length; ++i) {
-				int ret = first.getValue(slots[i]).compareTo(second.getValue(slots[i]));
-				if ()
+				ret = first.getValue(slots[i]).compareTo(second.getValue(slots[i]));
+				if (0 != ret)
+					break;
 			}
 			
-			return 
+			return ret;
 		}
 	}
 	
-	private class PagedHeap {
+	private class PagedArray extends AbstractList<Tuple> {
+		//calculated number of tuples per page
 		int tuplesNoPerPage = 0;
+		//number of tuples that may be stored in the buffer created
 		int heapCapacity = 0;
+		//actual number of tuples stored in an array
 		int heapSize = 0;
+		
+		//
 		String heapFile = null;
 		RelationIOManager heapMan = null;
 		Page pages[] = null;
 
-		public PagedHeap(int tupleSize, int pageSize, int pagesNo, Relation rel)
+		public PagedArray(int tupleSize, int pageSize, int pagesNo, Relation rel)
 				throws EngineException {
 			//calculate number of tuples per each page
 			tuplesNoPerPage = pageSize / tupleSize;
@@ -127,6 +140,14 @@ public class ExternalSort extends UnaryOperator {
 			}
 		}
 		
+		private int pagePosForIdx(int idx) {
+			return idx / tuplesNoPerPage;
+		}
+		
+		private int tuplePosForIdx(int idx) {
+			return idx % tuplesNoPerPage;
+		}
+		
 		//Move it to HEAP class
 		/**
 		 * Returns parent index, given index of node in question
@@ -147,6 +168,54 @@ public class ExternalSort extends UnaryOperator {
 		 */
 		public int rightChildIdx(int nodeIdx) {
 			return (2 * nodeIdx + 2);
+		}
+
+		@Override
+		public Tuple set(int idx, Tuple t) {
+			if (idx < 0 || idx >= size()) {
+				throw new IndexOutOfBoundsException();
+			}
+			Page page = pages[pagePosForIdx(idx)];
+			Tuple replaced = page.retrieveTuple(tuplePosForIdx(idx));
+			page.setTuple(pagePosForIdx(idx), t);
+			return replaced;
+		}
+		
+		@Override
+		public Tuple get(int idx) {
+			if (idx < 0 || idx >= size()) {
+				throw new IndexOutOfBoundsException();
+			}
+			Page page = pages[pagePosForIdx(idx)];
+			return page.retrieveTuple(tuplePosForIdx(idx));
+		}
+
+		/**
+		 * Can only remove at the end of the array
+		 */
+		@Override
+		public Tuple remove(int idx) {
+			if (idx == size() - 1) {
+				heapSize--;
+				return get(idx);
+			}
+			throw new IndexOutOfBoundsException();
+		}
+		
+		@Override
+		public int size() {
+			return heapSize;
+		}
+		
+		@Override 
+		public void add(Tuple t) {
+			if (size() < heapCapacity) {
+				final int newPos = size() - 1;
+				heapSize++;
+				Page page = pages[pagePosForIdx(newPos)];
+				page.setTuple(pagePosForIdx(newPos), t);
+			}
+			throw new IndexOutOfBoundsException();
 		}
 	}
 
