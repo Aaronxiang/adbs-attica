@@ -10,164 +10,217 @@
  */
 package org.dejave.attica.engine.operators;
 
+import java.io.IOException;
 import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 
+import javax.swing.text.html.MinimalHTMLWriter;
+
 import org.dejave.attica.model.Relation;
 import org.dejave.attica.storage.FileUtil;
 import org.dejave.attica.storage.Page;
 import org.dejave.attica.storage.RelationIOManager;
+import org.dejave.attica.storage.Sizes;
 import org.dejave.attica.storage.StorageManager;
 import org.dejave.attica.storage.StorageManagerException;
 import org.dejave.attica.storage.Tuple;
+import org.dejave.attica.storage.TupleIOManager;
+import org.dejave.util.MinListHeap;
+import org.dejave.util.Pair;
+
+import com.sun.org.apache.bcel.internal.generic.NEWARRAY;
 
 /**
  * ExternalSort: Your implementation of sorting.
- *
+ * 
  * @author sviglas
  */
 public class ExternalSort extends UnaryOperator {
 
 	/**
 	 * Class that takes care of comparing tuples.
+	 * 
 	 * @author krzys
-	 *
+	 * 
 	 */
 	private static class TupleComparator implements Comparator<Tuple> {
-		private int [] slots;
-		
-		public TupleComparator(int [] slots) {
+		private int[] slots;
+
+		public TupleComparator(int[] slots) {
 			this.slots = slots;
 		}
-		
+
 		public int compare(Tuple first, Tuple second) {
 			int ret = 0;
 			for (int i = 0; i < slots.length; ++i) {
-				ret = first.getValue(slots[i]).compareTo(second.getValue(slots[i]));
+				ret = first.getValue(slots[i]).compareTo(
+						second.getValue(slots[i]));
 				if (0 != ret)
 					break;
 			}
-			
+
 			return ret;
 		}
 	}
-	
-	private class PagedArray extends AbstractList<Tuple> {
-		//calculated number of tuples per page
+
+	/**
+	 * Don't implement Iterator, since every next() could throw exception, which
+	 * iterators don't handle
+	 * 
+	 * @author krzys
+	 * 
+	 */
+	private static class OperatorTuplesIterator /* implements Iterator<Tuple> */{
+		private Tuple lastTuple = null;
+		private boolean hasNxt = false;
+		private Operator op = null;
+
+		public OperatorTuplesIterator(Operator operator) throws EngineException {
+			op = operator;
+			// no worries, first tuple returned by next is null
+			next();
+		}
+
+		public boolean hasNext() {
+			return hasNxt;
+		}
+
+		public Tuple next() throws EngineException {
+			Tuple t = lastTuple;
+			// iterate until non-null tuple is gotten
+			// !NOTE: why does the tuple may be null?
+			while (true) {
+				lastTuple = op.getNext();
+				if (null != lastTuple) {
+					hasNxt = !(lastTuple instanceof EndOfStreamTuple);
+					break;
+				}
+			}
+			return t;
+		}
+
+		public Tuple peek() {
+			return lastTuple;
+		}
+	}
+
+	public static class ArrayCreationResult {
+		int elemsNoRead = 0;
+		PagedArray array = null;
+
+		public ArrayCreationResult(int elemsNoRead, PagedArray array) {
+			this.elemsNoRead = elemsNoRead;
+			this.array = array;
+		}
+	};
+
+	public static ArrayCreationResult createPagedArray(int tupleSize,
+			int pageSize, int maxPagesNo, Relation rel, StorageManager sm,
+			String arrayFileName, OperatorTuplesIterator inOpIter)
+			throws EngineException {
+		int tuplesNoPerPage = pageSize / tupleSize;
+		int maxArrayCapacity = tuplesNoPerPage * maxPagesNo;
+
+		// create a temporary file to back-up heap memory
+		String fileName = null;
+		RelationIOManager arrayManager = null;
+		try {
+			sm.createFile(fileName);
+			arrayManager = new RelationIOManager(sm, rel, arrayFileName);
+		} catch (StorageManagerException sme) {
+			// remove the file that has just been created and re-throw
+			try {sm.deleteFile(fileName);} catch (Exception e) {};
+			throw new EngineException("Could not instantiate " + "heap-file",
+					sme);
+		}
+
+		int arraySize = 0;
+		Page pages[] = null;
+		try {
+			// materialize the heap file with first heapCapacity number of
+			// tuples
+			while (inOpIter.hasNext()) {
+				arrayManager.insertTuple(inOpIter.next());
+				arraySize++;
+				// can't read more than fits into the allowed buffer size
+				if (arraySize >= maxArrayCapacity)
+					break;
+			}
+
+			// claim (store references of) all necessary pages
+			// it handles the case, when there was less tuples read than memory
+			// available - the array will just use less pages than provided
+			Iterator<Page> pagesIt = arrayManager.pages().iterator();
+			int realPagesNo = (int) Math
+					.ceil(1.0 * arraySize / tuplesNoPerPage);
+			pages = new Page[realPagesNo];
+			for (int i = 0; i < realPagesNo; ++i) {
+				pages[i] = pagesIt.next();
+			}
+		} catch (Exception sme) {
+			throw new EngineException("Couldn't initialize the array file", sme);
+		}
+
+		return new ArrayCreationResult(arraySize, new PagedArray(
+				tuplesNoPerPage, arraySize * tuplesNoPerPage, pages));
+	}
+
+	/**
+	 * Call this method before reference to this class is dropped. The temporary
+	 * file is deleted.
+	 * 
+	 * @throws EngineException
+	 */
+	public void cleanupPagedArray(String fileName) throws EngineException {
+		try {
+			sm.deleteFile(fileName);
+		} catch (StorageManagerException sme) {
+			throw new EngineException("Could not clean up array file", sme);
+		}
+	}
+
+	private static class PagedArray extends AbstractList<Tuple> {
+		// calculated number of tuples per page
 		int tuplesNoPerPage = 0;
-		//number of tuples that may be stored in the buffer created
-		int heapCapacity = 0;
-		//actual number of tuples stored in an array
-		int heapSize = 0;
-		
-		//
-		String heapFile = null;
-		RelationIOManager heapMan = null;
+		// number of tuples that may be stored in the buffer created
+		int arrayCapacity = 0;
+		// stores the filename of the materialized array structure
+		// String arrayFile = null;
+		// keeps pointers to Pages that constitute to this array
 		Page pages[] = null;
 
-		public PagedArray(int tupleSize, int pageSize, int pagesNo, Relation rel)
-				throws EngineException {
-			//calculate number of tuples per each page
-			tuplesNoPerPage = pageSize / tupleSize;
-			assert(tuplesNoPerPage > 0);
-			//set the heap size
-			heapCapacity = tuplesNoPerPage * pagesNo;
-
-			//create a temporary file to back-up heap memory
-			try {
-				heapFile = FileUtil.createTempFileName();
-				sm.createFile(heapFile);
-				heapMan = new RelationIOManager(sm, rel, heapFile);
-			}
-			catch (StorageManagerException sme) {
-				throw new EngineException("Could not instantiate "
-						+ "heap-file", sme);
-			}
+		public PagedArray(int tuplesNoPerPage, int arrayCapacity,
+				Page pages[]) throws EngineException {
+			this.tuplesNoPerPage = tuplesNoPerPage;
+			this.arrayCapacity = arrayCapacity;
+			this.pages = pages;
 		}
 
-		public void populate(Iterable<Tuple> tuples) 
-				throws EngineException {			
-			try {
-				//materialize the heap file with first heapCapacity number of tuples
-				heapSize = 0;
-				for (Tuple inTuple : tuples) {
-					heapMan.insertTuple(inTuple);
-					heapSize++;
-					//we can't read more than fits into the buffer
-					if (heapSize >= heapCapacity) 
-						break;
-				}
-				
-				//claim all necessary pages, it handles the case, when there was less tuples 
-				//than memory available - heap will just not use all available pages
-				Iterator<Page> pagesIt = heapMan.pages().iterator();
-				int realPagesNo = (int)Math.ceil(1.0 * heapSize / tuplesNoPerPage);
-				pages = new Page[realPagesNo];
-				for (int i = 0; i < realPagesNo; ++i) {
-					pages[i] = pagesIt.next();
-				}
-			}
-			catch (Exception sme) {
-				throw new EngineException("Couldn't initialize the heap-file", sme);
-			}
-		}
-		
-		public void buildHeap() {
-		}
-		
-		public void heapify(int tupleIndex, TupleComparator comparator) {
-			int left = leftChildIdx(tupleIndex);
-			int rightTupleIdx = rightChildIdx(tupleIndex);
-			int extremeIdx = tupleIndex;
-			if (leftTupleIdx < heapSize && 
-					comparator.compare(tupleAt(leftTupleIdx), tupleAt(extremeIdx)) {
-				extremeIdx = leftTupleIdx;
-			}
-			if (rightTupleIdx < heapSize &&
-					comparator.compare(tupleAt(rightTupleIdx), tupleAt(extremeIdx)) {
-				extremeIdx = rightTupleIdx;
-			}
-			
-			if (extremeIdx != tupleIndex) {//the parent node didn't fulfill the max/min-heap property - go deeper
-				//swap places with the largest of the children
-				swapTuples(extremeIdx, tupleIndex);
-				
-				//it may be the case that old parent, pushed to the botton, is still smaller thant its new children
-				heapify(extremeIdx, comparator);
-			}
-		}
-		
+		/**
+		 * Returns index of a page where tuple of index idx exists;
+		 */
 		private int pagePosForIdx(int idx) {
 			return idx / tuplesNoPerPage;
 		}
-		
+
+		/**
+		 * Returns index of tuple of index idx, within a page ({@link
+		 * pagePosForIdx()}
+		 */
 		private int tuplePosForIdx(int idx) {
 			return idx % tuplesNoPerPage;
 		}
-		
-		//Move it to HEAP class
-		/**
-		 * Returns parent index, given index of node in question
-		 */
-		public int parentIdx(int nodeIdx) {
-			return ((nodeIdx - 1) / 2);
-		}
-		
-		/**
-		 * Returns index of the left child of node in question
-		 */
-		public int leftChildIdx(int nodeIdx) {
-			return (2 * nodeIdx + 1);
-		}
 
-		/**
-		 * Returns index of the right child of node in question
-		 */
-		public int rightChildIdx(int nodeIdx) {
-			return (2 * nodeIdx + 2);
+		@Override
+		public Tuple get(int idx) {
+			if (idx < 0 || idx >= size()) {
+				throw new IndexOutOfBoundsException();
+			}
+			Page page = pages[pagePosForIdx(idx)];
+			return page.retrieveTuple(tuplePosForIdx(idx));
 		}
 
 		@Override
@@ -180,46 +233,74 @@ public class ExternalSort extends UnaryOperator {
 			page.setTuple(pagePosForIdx(idx), t);
 			return replaced;
 		}
-		
-		@Override
-		public Tuple get(int idx) {
-			if (idx < 0 || idx >= size()) {
-				throw new IndexOutOfBoundsException();
+
+		/**
+		 * Removes element at the position idx, setting it to null. (remove()
+		 * name changed deliberately)
+		 */
+		public Tuple removeAt(int idx) {
+			if (idx == size() - 1) {// has to be less than the size
+				Tuple t = get(idx);
+				set(idx, null);// this could be optimized so that bounds are not
+								// cheeked inside set
+				return t;
 			}
-			Page page = pages[pagePosForIdx(idx)];
-			return page.retrieveTuple(tuplePosForIdx(idx));
+			throw new IndexOutOfBoundsException();
 		}
 
 		/**
-		 * Can only remove at the end of the array
+		 * Returns total number of elements that can be stored in this array.
 		 */
 		@Override
-		public Tuple remove(int idx) {
-			if (idx == size() - 1) {
-				heapSize--;
-				return get(idx);
-			}
-			throw new IndexOutOfBoundsException();
-		}
-		
-		@Override
 		public int size() {
-			return heapSize;
+			return arrayCapacity;
+		}
+	}
+	
+	static class MergeFilesData {
+		private RelationIOManager rioManager = null;
+		private Iterator<Tuple> tuplesIt = null;
+		private String fileName = null;
+		private Tuple currentValue = null;
+		
+		public MergeFilesData(String fileName, Relation rel, StorageManager sm) 
+				throws IOException, StorageManagerException {
+			this.rioManager = new RelationIOManager(sm, rel, fileName);
+			this.tuplesIt = rioManager.tuples().iterator();
+			this.fileName = fileName;
+			if (tuplesIt.hasNext()) {
+				currentValue = tuplesIt.next();
+			}
 		}
 		
-		@Override 
-		public void add(Tuple t) {
-			if (size() < heapCapacity) {
-				final int newPos = size() - 1;
-				heapSize++;
-				Page page = pages[pagePosForIdx(newPos)];
-				page.setTuple(pagePosForIdx(newPos), t);
-			}
-			throw new IndexOutOfBoundsException();
+		public void removeFile(StorageManager sm) 
+				throws StorageManagerException {
+			sm.deleteFile(fileName);
+		}
+		
+		public Tuple value() {
+			return currentValue;
+		}
+		
+		public Tuple nextValue() {
+			currentValue = tuplesIt.next();
+			return currentValue;
 		}
 	}
 
+	static class MFDComparator implements Comparator<MergeFilesData> {
+		TupleComparator comparator = null;
+		
+		public MFDComparator(TupleComparator comparator) {
+			this.comparator = comparator;
+		}
 
+		@Override
+		public int compare(MergeFilesData v1, MergeFilesData v2) {
+			return comparator.compare(v1.value(), v1.value());
+		}
+	}
+	
 	/** The storage manager for this operator. */
 	private StorageManager sm;
 
@@ -230,10 +311,11 @@ public class ExternalSort extends UnaryOperator {
 	private RelationIOManager outputMan;
 
 	/** The slots that act as the sort keys. */
-	private int [] slots;
+	private int[] slots;
 
-	/** Number of buffers (i.e., buffer pool pages and 
-	 * output files). */
+	/**
+	 * Number of buffers (i.e., buffer pool pages and output files).
+	 */
 	private int buffers;
 
 	/** Iterator over the output file. */
@@ -242,21 +324,24 @@ public class ExternalSort extends UnaryOperator {
 	/** Reusable tuple list for returns. */
 	private List<Tuple> returnList;
 
-
 	/**
 	 * Constructs a new external sort operator.
 	 * 
-	 * @param operator the input operator.
-	 * @param sm the storage manager.
-	 * @param slots the indexes of the sort keys.
-	 * @param buffers the number of buffers (i.e., run files) to be
-	 * used for the sort.
-	 * @throws EngineException thrown whenever the sort operator
-	 * cannot be properly initialized.
+	 * @param operator
+	 *            the input operator.
+	 * @param sm
+	 *            the storage manager.
+	 * @param slots
+	 *            the indexes of the sort keys.
+	 * @param buffers
+	 *            the number of buffers (i.e., run files) to be used for the
+	 *            sort.
+	 * @throws EngineException
+	 *             thrown whenever the sort operator cannot be properly
+	 *             initialized.
 	 */
-	public ExternalSort(Operator operator, StorageManager sm,
-			int [] slots, int buffers) 
-					throws EngineException {
+	public ExternalSort(Operator operator, StorageManager sm, int[] slots,
+			int buffers) throws EngineException {
 
 		super(operator);
 		this.sm = sm;
@@ -265,23 +350,20 @@ public class ExternalSort extends UnaryOperator {
 		try {
 			// create the temporary output files
 			initTempFiles();
-		}
-		catch (StorageManagerException sme) {
+		} catch (StorageManagerException sme) {
 			throw new EngineException("Could not instantiate external sort",
 					sme);
 		}
 	} // ExternalSort()
 
-
 	/**
-	 * Initialises the temporary files, according to the number
-	 * of buffers.
+	 * Initialises the temporary files, according to the number of buffers.
 	 * 
-	 * @throws StorageManagerException thrown whenever the temporary
-	 * files cannot be initialised.
+	 * @throws StorageManagerException
+	 *             thrown whenever the temporary files cannot be initialised.
 	 */
 	protected void initTempFiles() throws StorageManagerException {
-		////////////////////////////////////////////
+		// //////////////////////////////////////////
 		//
 		// initialise the temporary files here
 		// make sure you throw the right exception
@@ -290,48 +372,32 @@ public class ExternalSort extends UnaryOperator {
 		// for the time being, the only file we
 		// know of is the output file
 		//
-		////////////////////////////////////////////
+		// //////////////////////////////////////////
 		outputFile = FileUtil.createTempFileName();
 	} // initTempFiles()
-
 
 	/**
 	 * Sets up this external sort operator.
 	 * 
-	 * @throws EngineException thrown whenever there is something wrong with
-	 * setting this operator up
+	 * @throws EngineException
+	 *             thrown whenever there is something wrong with setting this
+	 *             operator up
 	 */
 	public void setup() throws EngineException {
 		returnList = new ArrayList<Tuple>();
 		try {
-			////////////////////////////////////////////
+			// //////////////////////////////////////////
 			//
 			// this is a blocking operator -- store the input
 			// in a temporary file and sort the file
 			//
-			////////////////////////////////////////////
+			// //////////////////////////////////////////
 
-			////////////////////////////////////////////
+			// //////////////////////////////////////////
 			//
 			// YOUR CODE GOES HERE
-			//            // store the left input
 
-			//with this, the input is already buffered
-			Relation rel = getInputOperator().getOutputRelation();
-			RelationIOManager man =
-					new RelationIOManager(getStorageManager(), rel, fileName);
-			boolean done = false;
-			while (! done) {
-				Tuple tuple = getInputOperator().getNext();
-				if (tuple != null) {
-					done = (tuple instanceof EndOfStreamTuple);
-					if (!done) man.insertTuple(tuple);
-				}
-			}
-			//we have opened file on disk, completely paginated
-
-			//parameters of external sort
-			/**
+			/*
 			 * input operator - it can be anything;
 			 * storage manager - link to the system for io, don't need to modify it
 			 * slots array - array of indexes into attributes of input.  It could look like slots = {2, 3, 0} - contain
@@ -371,8 +437,22 @@ public class ExternalSort extends UnaryOperator {
 			 * 
 			 */
 
-			
-			/** ANOTHER CLASSES
+			 /* iteartor, write it to output and advance only this one
+			 * 
+			 * //instaad to array - create a heap
+			 * 
+			 * //delete B file names from the beginning of the list } }
+			 * 
+			 * 
+			 * Not straightforward Array of pages - use the same technique of
+			 * taking index and turning into offsets - turn into a heap -
+			 * replacement selection //keep a counter that acts as a division
+			 * point between two heaps
+			 * 
+			 * Another implementation - priority queues for queues but ensuring
+			 * we don't exceed the N number Timings - if example schema used -
+			 * sorting 1 million records, 50 buffer per pages, 1 sort -> 10 - 15
+			 * seconds
 			 * 
 			 *  go through the algorithm
 			 *  
@@ -450,76 +530,216 @@ public class ExternalSort extends UnaryOperator {
 			 *  Timings - if example schema used - sorting 1 million records, 50 buffer per pages, 1 sort -> 10 - 15 seconds
 			 *  
 			 */
-			////////////////////////////////////////////
+			// //////////////////////////////////////////
 
-
-
-			////////////////////////////////////////////
+			// //////////////////////////////////////////
 			//
 			// the output should reside in the output file
 			//
-			////////////////////////////////////////////
+			// //////////////////////////////////////////
 
-			outputMan = new RelationIOManager(sm, getOutputRelation(),
-					outputFile);
-			outputTuples = outputMan.tuples().iterator();
-		}
-		catch (Exception sme) {
+			Operator inOperator = getInputOperator();
+			Relation inRelation = inOperator.getOutputRelation();
+			OperatorTuplesIterator opTupIter = new OperatorTuplesIterator(inOperator);
+			
+			if (opTupIter.hasNext()) {
+	            String arrayBufferFile = FileUtil.createTempFileName();
+	            //buffers - 2 is used, since we use 1 page for input and 1 for output
+				ArrayCreationResult res = createPagedArray(TupleIOManager.byteSize(inRelation, opTupIter.peek()), 
+						Sizes.PAGE_SIZE, buffers - 2, inRelation, sm, arrayBufferFile, opTupIter);
+				
+				PagedArray buffArray = res.array;
+				//number of elements that count into current run (they are heapified)
+				//these elements take positions [0..heapElementsNo-1] in the array
+				int heapElementsNo = res.elemsNoRead;
+				//start of the next run partial array
+				//these elements take positions [nextRunStartIdx..buffArray.size()-1]
+				int nextRunStartIdx = buffArray.size();
+				
+				TupleComparator comparator = new TupleComparator(slots);
+				MinListHeap<Tuple> heapifier = new MinListHeap<Tuple>();
+				heapifier.buildHeap(buffArray, comparator);
+				
+				ArrayList<String> runFiles = new ArrayList<String>();
+				
+				//generate run files
+				while (true) {
+					//new run file
+					String runFile = FileUtil.createTempFileName();
+					runFiles.add(runFile);
+					sm.createFile(runFile);
+					RelationIOManager runRIOMgr = new RelationIOManager(sm, inRelation, runFile);
+					
+					//take root (smallest element) and insert in run file
+					Tuple lastTuple = buffArray.get(0);
+					runRIOMgr.insertTuple(lastTuple);
+					
+					while (0 != heapElementsNo) {//while current run is ongoing
+						Tuple newTuple = null;
+						if (opTupIter.hasNext()) 
+							newTuple = opTupIter.next();
+						
+						//if there is another input tuple, read it
+						if (null != newTuple) {
+							int cmpRet = comparator.compare(lastTuple, newTuple);
+							if (0 == cmpRet) {//if is the same as previous output one, put it to the output straightaway
+								runRIOMgr.insertTuple(newTuple);
+							}
+							else if (cmpRet < 0) {//new tuple is smaller, put to the next run
+								nextRunStartIdx--;
+								heapElementsNo--;
+								//evicted tuple will never be null - since we keep the array full
+								Tuple evictedTuple = buffArray.set(nextRunStartIdx, newTuple);
+								buffArray.set(0, evictedTuple);
+							}
+							else {//tuple bigger, could be used in a current run
+								buffArray.set(0, newTuple);
+							}							
+						}
+						else {//no more input
+							Tuple lastHeapTuple = buffArray.get(heapElementsNo - 1);
+							buffArray.set(0, lastHeapTuple);
+							heapElementsNo--;
+						}
+						
+						//preserve heap property
+						heapifier.heapify(buffArray, 0, heapElementsNo, comparator);
+						//take minimum element and output to run file
+						lastTuple = buffArray.get(0);
+						runRIOMgr.insertTuple(lastTuple);
+					}
+					
+					if (buffArray.size() == nextRunStartIdx) {//no more input, no elements for a next run
+						break;
+					}
+					else {
+						if (0 == nextRunStartIdx) {//next run fills entire buffer
+							heapElementsNo = buffArray.size();
+							nextRunStartIdx = buffArray.size();
+						}
+						else {//if doesn't - that means we are run out of input. Move elements to the beginning of the array
+							heapElementsNo = 0;
+							for (; nextRunStartIdx != buffArray.size(); ++nextRunStartIdx, ++heapElementsNo) {
+								buffArray.set(heapElementsNo, buffArray.get(nextRunStartIdx));
+							}
+						}
+						//build a new heap
+						heapifier.buildHeap(buffArray, heapElementsNo, comparator);
+					}
+				}
+				
+				//merge run files
+				ArrayList<String> currentRunFiles = runFiles;
+				ArrayList<String> newRunFiles = new ArrayList<String>();	
+				RelationIOManager runFileRelManager = null;
+				final int buffersNoForMerge = buffers - 1;
+				ArrayList<MergeFilesData> mergedRuns = new ArrayList<ExternalSort.MergeFilesData>();
+				MFDComparator mfdComparator = new MFDComparator(comparator);
+				MinListHeap<MergeFilesData> mfdHeapifier = new MinListHeap<ExternalSort.MergeFilesData>();
+				
+				//if we are not done yet with merging, keep going
+				while (currentRunFiles.size() > 0) {
+					if (currentRunFiles.size() < buffersNoForMerge) {//this is a final merge
+						runFileRelManager = 
+								new RelationIOManager(sm, inRelation, outputFile);
+					}
+					
+					while (0 != currentRunFiles.size()) {
+						if (null == runFileRelManager) {//this is not the final merge, so add temporary file
+							String runFileName = FileUtil.createTempFileName();
+							newRunFiles.add(runFileName);
+							runFileRelManager = 
+									new RelationIOManager(sm, inRelation, runFileName);
+							newRunFiles.add(runFileName);
+						}
+					
+						int mergedRunsNo = Math.min(currentRunFiles.size(), buffersNoForMerge);
+						for (int i = 0; i < mergedRunsNo; ++i) {
+							mergedRuns.add(
+									new MergeFilesData(currentRunFiles.remove(i), inRelation, sm));
+						}
+						
+						mfdHeapifier.buildHeap(mergedRuns, mfdComparator);
+						while (! mergedRuns.isEmpty()) {
+							//take heap root, which is a heap minimum and output it
+							MergeFilesData d = mergedRuns.get(0);
+							runFileRelManager.insertTuple(d.value());
+							if (null == d.nextValue()) {//if this was the last tuple from this run, remove from list
+								mergedRuns.set(0, mergedRuns.remove(mergedRunsNo--));
+							}
+							mfdHeapifier.heapify(mergedRuns, 0, mfdComparator);
+						}
+					}
+					
+					//clean up all the temporary files
+					//TODO: maybe I should do it every time after the run file gets read - this way peak disk memory consumption would be lower
+					for (String mergedFile : currentRunFiles) {
+						sm.deleteFile(mergedFile);
+					}
+					currentRunFiles.clear();
+					currentRunFiles.addAll(newRunFiles);
+					newRunFiles.clear();
+				}
+				
+				
+				cleanupPagedArray(arrayBufferFile);
+			}
+			
+			
+			
+		} catch (Exception sme) {
 			throw new EngineException("Could not store and sort"
 					+ "intermediate files.", sme);
 		}
 	} // setup()
 
-
 	/**
 	 * Cleanup after the sort.
 	 * 
-	 * @throws EngineException whenever the operator cannot clean up
-	 * after itself.
+	 * @throws EngineException
+	 *             whenever the operator cannot clean up after itself.
 	 */
-	public void cleanup () throws EngineException {
+	public void cleanup() throws EngineException {
 		try {
-			////////////////////////////////////////////
+			// //////////////////////////////////////////
 			//
 			// make sure you delete the intermediate
 			// files after sorting is done
 			//
-			////////////////////////////////////////////
+			// //////////////////////////////////////////
 
-			////////////////////////////////////////////
+			// //////////////////////////////////////////
 			//
-			// right now, only the output file is 
+			// right now, only the output file is
 			// deleted
 			//
-			////////////////////////////////////////////
+			// //////////////////////////////////////////
 			sm.deleteFile(outputFile);
-		}
-		catch (StorageManagerException sme) {
+		} catch (StorageManagerException sme) {
 			throw new EngineException("Could not clean up final output.", sme);
 		}
 	} // cleanup()
-
 
 	/**
 	 * The inner method to retrieve tuples.
 	 * 
 	 * @return the newly retrieved tuples.
-	 * @throws EngineException thrown whenever the next iteration is not 
-	 * possible.
-	 */    
-	protected List<Tuple> innerGetNext () throws EngineException {
+	 * @throws EngineException
+	 *             thrown whenever the next iteration is not possible.
+	 */
+	protected List<Tuple> innerGetNext() throws EngineException {
 		try {
 			returnList.clear();
-			if (outputTuples.hasNext()) returnList.add(outputTuples.next());
-			else returnList.add(new EndOfStreamTuple());
+			if (outputTuples.hasNext())
+				returnList.add(outputTuples.next());
+			else
+				returnList.add(new EndOfStreamTuple());
 			return returnList;
-		}
-		catch (Exception sme) {
-			throw new EngineException("Could not read tuples " +
-					"from intermediate file.", sme);
+		} catch (Exception sme) {
+			throw new EngineException("Could not read tuples "
+					+ "from intermediate file.", sme);
 		}
 	} // innerGetNext()
-
 
 	/**
 	 * Operator class abstract interface -- never called.
@@ -529,14 +749,13 @@ public class ExternalSort extends UnaryOperator {
 		return new ArrayList<Tuple>();
 	} // innerProcessTuple()
 
-
 	/**
-	 * Operator class abstract interface -- sets the ouput relation of
-	 * this sort operator.
+	 * Operator class abstract interface -- sets the ouput relation of this sort
+	 * operator.
 	 * 
 	 * @return this operator's output relation.
-	 * @throws EngineException whenever the output relation of this
-	 * operator cannot be set.
+	 * @throws EngineException
+	 *             whenever the output relation of this operator cannot be set.
 	 */
 	protected Relation setOutputRelation() throws EngineException {
 		return new Relation(getInputOperator().getOutputRelation());
