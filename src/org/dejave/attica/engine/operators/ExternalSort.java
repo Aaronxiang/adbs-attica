@@ -120,7 +120,7 @@ public class ExternalSort extends UnaryOperator {
 	public static ArrayCreationResult createPagedArray(int tupleSize,
 			int pageSize, int maxPagesNo, Relation rel, StorageManager sm,
 			String arrayFileName, OperatorTuplesIterator inOpIter)
-			throws EngineException {
+					throws EngineException {
 		int tuplesNoPerPage = pageSize / tupleSize;
 		int maxArrayCapacity = tuplesNoPerPage * maxPagesNo;
 
@@ -242,7 +242,7 @@ public class ExternalSort extends UnaryOperator {
 			if (idx == size() - 1) {// has to be less than the size
 				Tuple t = get(idx);
 				set(idx, null);// this could be optimized so that bounds are not
-								// cheeked inside set
+				// cheeked inside set
 				return t;
 			}
 			throw new IndexOutOfBoundsException();
@@ -256,13 +256,13 @@ public class ExternalSort extends UnaryOperator {
 			return arrayCapacity;
 		}
 	}
-	
+
 	static class MergeFilesData {
 		private RelationIOManager rioManager = null;
 		private Iterator<Tuple> tuplesIt = null;
 		private String fileName = null;
 		private Tuple currentValue = null;
-		
+
 		public MergeFilesData(String fileName, Relation rel, StorageManager sm) 
 				throws IOException, StorageManagerException {
 			this.rioManager = new RelationIOManager(sm, rel, fileName);
@@ -272,16 +272,16 @@ public class ExternalSort extends UnaryOperator {
 				currentValue = tuplesIt.next();
 			}
 		}
-		
+
 		public void removeFile(StorageManager sm) 
 				throws StorageManagerException {
 			sm.deleteFile(fileName);
 		}
-		
+
 		public Tuple value() {
 			return currentValue;
 		}
-		
+
 		public Tuple nextValue() {
 			currentValue = tuplesIt.next();
 			return currentValue;
@@ -290,7 +290,7 @@ public class ExternalSort extends UnaryOperator {
 
 	static class MFDComparator implements Comparator<MergeFilesData> {
 		TupleComparator comparator = null;
-		
+
 		public MFDComparator(TupleComparator comparator) {
 			this.comparator = comparator;
 		}
@@ -300,7 +300,7 @@ public class ExternalSort extends UnaryOperator {
 			return comparator.compare(v1.value(), v1.value());
 		}
 	}
-	
+
 	/** The storage manager for this operator. */
 	private StorageManager sm;
 
@@ -437,7 +437,7 @@ public class ExternalSort extends UnaryOperator {
 			 * 
 			 */
 
-			 /* iteartor, write it to output and advance only this one
+			/* iteartor, write it to output and advance only this one
 			 * 
 			 * //instaad to array - create a heap
 			 * 
@@ -538,155 +538,173 @@ public class ExternalSort extends UnaryOperator {
 			//
 			// //////////////////////////////////////////
 
-			Operator inOperator = getInputOperator();
-			Relation inRelation = inOperator.getOutputRelation();
-			OperatorTuplesIterator opTupIter = new OperatorTuplesIterator(inOperator);
-			
-			if (opTupIter.hasNext()) {
-	            String arrayBufferFile = FileUtil.createTempFileName();
-	            //buffers - 2 is used, since we use 1 page for input and 1 for output
-				ArrayCreationResult res = createPagedArray(TupleIOManager.byteSize(inRelation, opTupIter.peek()), 
-						Sizes.PAGE_SIZE, buffers - 2, inRelation, sm, arrayBufferFile, opTupIter);
-				
-				PagedArray buffArray = res.array;
-				//number of elements that count into current run (they are heapified)
-				//these elements take positions [0..heapElementsNo-1] in the array
-				int heapElementsNo = res.elemsNoRead;
-				//start of the next run partial array
-				//these elements take positions [nextRunStartIdx..buffArray.size()-1]
-				int nextRunStartIdx = buffArray.size();
-				
-				TupleComparator comparator = new TupleComparator(slots);
-				MinListHeap<Tuple> heapifier = new MinListHeap<Tuple>();
-				heapifier.buildHeap(buffArray, comparator);
-				
-				ArrayList<String> runFiles = new ArrayList<String>();
-				
-				//generate run files
-				while (true) {
-					//new run file
-					String runFile = FileUtil.createTempFileName();
-					runFiles.add(runFile);
-					sm.createFile(runFile);
-					RelationIOManager runRIOMgr = new RelationIOManager(sm, inRelation, runFile);
-					
-					//take root (smallest element) and insert in run file
-					Tuple lastTuple = buffArray.get(0);
-					runRIOMgr.insertTuple(lastTuple);
-					
-					while (0 != heapElementsNo) {//while current run is ongoing
-						Tuple newTuple = null;
-						if (opTupIter.hasNext()) 
-							newTuple = opTupIter.next();
-						
-						//if there is another input tuple, read it
-						if (null != newTuple) {
-							int cmpRet = comparator.compare(lastTuple, newTuple);
-							if (0 == cmpRet) {//if is the same as previous output one, put it to the output straightaway
-								runRIOMgr.insertTuple(newTuple);
-							}
-							else if (cmpRet < 0) {//new tuple is smaller, put to the next run
-								nextRunStartIdx--;
-								heapElementsNo--;
-								//evicted tuple will never be null - since we keep the array full
-								Tuple evictedTuple = buffArray.set(nextRunStartIdx, newTuple);
-								buffArray.set(0, evictedTuple);
-							}
-							else {//tuple bigger, could be used in a current run
-								buffArray.set(0, newTuple);
-							}							
-						}
-						else {//no more input
-							Tuple lastHeapTuple = buffArray.get(heapElementsNo - 1);
-							buffArray.set(0, lastHeapTuple);
-							heapElementsNo--;
-						}
-						
-						//preserve heap property
-						heapifier.heapify(buffArray, 0, heapElementsNo, comparator);
-						//take minimum element and output to run file
-						lastTuple = buffArray.get(0);
-						runRIOMgr.insertTuple(lastTuple);
-					}
-					
-					if (buffArray.size() == nextRunStartIdx) {//no more input, no elements for a next run
-						break;
-					}
-					else {
-						if (0 == nextRunStartIdx) {//next run fills entire buffer
-							heapElementsNo = buffArray.size();
-							nextRunStartIdx = buffArray.size();
-						}
-						else {//if doesn't - that means we are run out of input. Move elements to the beginning of the array
-							heapElementsNo = 0;
-							for (; nextRunStartIdx != buffArray.size(); ++nextRunStartIdx, ++heapElementsNo) {
-								buffArray.set(heapElementsNo, buffArray.get(nextRunStartIdx));
-							}
-						}
-						//build a new heap
-						heapifier.buildHeap(buffArray, heapElementsNo, comparator);
+			if (true) {
+
+				Relation rel = getInputOperator().getOutputRelation();
+				RelationIOManager rMan =
+						new RelationIOManager(sm, rel, outputFile);
+				boolean done = false;
+				while (! done) {
+					Tuple tuple = getInputOperator().getNext();
+					if (tuple != null) {
+						done = (tuple instanceof EndOfStreamTuple);
+						if (! done) rMan.insertTuple(tuple);
 					}
 				}
 				
-				//merge run files
-				ArrayList<String> currentRunFiles = runFiles;
-				ArrayList<String> newRunFiles = new ArrayList<String>();	
-				RelationIOManager runFileRelManager = null;
-				final int buffersNoForMerge = buffers - 1;
-				ArrayList<MergeFilesData> mergedRuns = new ArrayList<ExternalSort.MergeFilesData>();
-				MFDComparator mfdComparator = new MFDComparator(comparator);
-				MinListHeap<MergeFilesData> mfdHeapifier = new MinListHeap<ExternalSort.MergeFilesData>();
-				
-				//if we are not done yet with merging, keep going
-				while (currentRunFiles.size() > 0) {
-					if (currentRunFiles.size() < buffersNoForMerge) {//this is a final merge
-						runFileRelManager = 
-								new RelationIOManager(sm, inRelation, outputFile);
-					}
-					
-					while (0 != currentRunFiles.size()) {
-						if (null == runFileRelManager) {//this is not the final merge, so add temporary file
-							String runFileName = FileUtil.createTempFileName();
-							newRunFiles.add(runFileName);
-							runFileRelManager = 
-									new RelationIOManager(sm, inRelation, runFileName);
-							newRunFiles.add(runFileName);
-						}
-					
-						int mergedRunsNo = Math.min(currentRunFiles.size(), buffersNoForMerge);
-						for (int i = 0; i < mergedRunsNo; ++i) {
-							mergedRuns.add(
-									new MergeFilesData(currentRunFiles.remove(i), inRelation, sm));
-						}
-						
-						mfdHeapifier.buildHeap(mergedRuns, mfdComparator);
-						while (! mergedRuns.isEmpty()) {
-							//take heap root, which is a heap minimum and output it
-							MergeFilesData d = mergedRuns.get(0);
-							runFileRelManager.insertTuple(d.value());
-							if (null == d.nextValue()) {//if this was the last tuple from this run, remove from list
-								mergedRuns.set(0, mergedRuns.remove(mergedRunsNo--));
-							}
-							mfdHeapifier.heapify(mergedRuns, 0, mfdComparator);
-						}
-					}
-					
-					//clean up all the temporary files
-					//TODO: maybe I should do it every time after the run file gets read - this way peak disk memory consumption would be lower
-					for (String mergedFile : currentRunFiles) {
-						sm.deleteFile(mergedFile);
-					}
-					currentRunFiles.clear();
-					currentRunFiles.addAll(newRunFiles);
-					newRunFiles.clear();
-				}
-				
-				
-				cleanupPagedArray(arrayBufferFile);
+				outputTuples = rMan.tuples().iterator();
 			}
-			
-			
-			
+			else {
+
+				Operator inOperator = getInputOperator();
+				Relation inRelation = inOperator.getOutputRelation();
+				OperatorTuplesIterator opTupIter = new OperatorTuplesIterator(inOperator);
+
+				if (opTupIter.hasNext()) {
+					String arrayBufferFile = FileUtil.createTempFileName();
+					//buffers - 2 is used, since we use 1 page for input and 1 for output
+					ArrayCreationResult res = createPagedArray(TupleIOManager.byteSize(inRelation, opTupIter.peek()), 
+							Sizes.PAGE_SIZE, buffers - 2, inRelation, sm, arrayBufferFile, opTupIter);
+
+					PagedArray buffArray = res.array;
+					//number of elements that count into current run (they are heapified)
+					//these elements take positions [0..heapElementsNo-1] in the array
+					int heapElementsNo = res.elemsNoRead;
+					//start of the next run partial array
+					//these elements take positions [nextRunStartIdx..buffArray.size()-1]
+					int nextRunStartIdx = buffArray.size();
+
+					TupleComparator comparator = new TupleComparator(slots);
+					MinListHeap<Tuple> heapifier = new MinListHeap<Tuple>();
+					heapifier.buildHeap(buffArray, comparator);
+
+					ArrayList<String> runFiles = new ArrayList<String>();
+
+					//generate run files
+					while (true) {
+						//new run file
+						String runFile = FileUtil.createTempFileName();
+						runFiles.add(runFile);
+						sm.createFile(runFile);
+						RelationIOManager runRIOMgr = new RelationIOManager(sm, inRelation, runFile);
+
+						//take root (smallest element) and insert in run file
+						Tuple lastTuple = buffArray.get(0);
+						runRIOMgr.insertTuple(lastTuple);
+
+						while (0 != heapElementsNo) {//while current run is ongoing
+							Tuple newTuple = null;
+							if (opTupIter.hasNext()) 
+								newTuple = opTupIter.next();
+
+							//if there is another input tuple, read it
+							if (null != newTuple) {
+								int cmpRet = comparator.compare(lastTuple, newTuple);
+								if (0 == cmpRet) {//if is the same as previous output one, put it to the output straightaway
+									runRIOMgr.insertTuple(newTuple);
+								}
+								else if (cmpRet < 0) {//new tuple is smaller, put to the next run
+									nextRunStartIdx--;
+									heapElementsNo--;
+									//evicted tuple will never be null - since we keep the array full
+									Tuple evictedTuple = buffArray.set(nextRunStartIdx, newTuple);
+									buffArray.set(0, evictedTuple);
+								}
+								else {//tuple bigger, could be used in a current run
+									buffArray.set(0, newTuple);
+								}							
+							}
+							else {//no more input
+								Tuple lastHeapTuple = buffArray.get(heapElementsNo - 1);
+								buffArray.set(0, lastHeapTuple);
+								heapElementsNo--;
+							}
+
+							//preserve heap property
+							heapifier.heapify(buffArray, 0, heapElementsNo, comparator);
+							//take minimum element and output to run file
+							lastTuple = buffArray.get(0);
+							runRIOMgr.insertTuple(lastTuple);
+						}
+
+						if (buffArray.size() == nextRunStartIdx) {//no more input, no elements for a next run
+							break;
+						}
+						else {
+							if (0 == nextRunStartIdx) {//next run fills entire buffer
+								heapElementsNo = buffArray.size();
+								nextRunStartIdx = buffArray.size();
+							}
+							else {//if doesn't - that means we are run out of input. Move elements to the beginning of the array
+								heapElementsNo = 0;
+								for (; nextRunStartIdx != buffArray.size(); ++nextRunStartIdx, ++heapElementsNo) {
+									buffArray.set(heapElementsNo, buffArray.get(nextRunStartIdx));
+								}
+							}
+							//build a new heap
+							heapifier.buildHeap(buffArray, heapElementsNo, comparator);
+						}
+					}
+
+					//merge run files
+					ArrayList<String> currentRunFiles = runFiles;
+					ArrayList<String> newRunFiles = new ArrayList<String>();	
+					RelationIOManager runFileRelManager = null;
+					final int buffersNoForMerge = buffers - 1;
+					ArrayList<MergeFilesData> mergedRuns = new ArrayList<ExternalSort.MergeFilesData>();
+					MFDComparator mfdComparator = new MFDComparator(comparator);
+					MinListHeap<MergeFilesData> mfdHeapifier = new MinListHeap<ExternalSort.MergeFilesData>();
+
+					//if we are not done yet with merging, keep going
+					while (currentRunFiles.size() > 0) {
+						if (currentRunFiles.size() < buffersNoForMerge) {//this is a final merge
+							runFileRelManager = 
+									new RelationIOManager(sm, inRelation, outputFile);
+						}
+
+						while (0 != currentRunFiles.size()) {
+							if (null == runFileRelManager) {//this is not the final merge, so add temporary file
+								String runFileName = FileUtil.createTempFileName();
+								newRunFiles.add(runFileName);
+								runFileRelManager = 
+										new RelationIOManager(sm, inRelation, runFileName);
+								newRunFiles.add(runFileName);
+							}
+
+							int mergedRunsNo = Math.min(currentRunFiles.size(), buffersNoForMerge);
+							for (int i = 0; i < mergedRunsNo; ++i) {
+								mergedRuns.add(
+										new MergeFilesData(currentRunFiles.remove(i), inRelation, sm));
+							}
+
+							mfdHeapifier.buildHeap(mergedRuns, mfdComparator);
+							while (! mergedRuns.isEmpty()) {
+								//take heap root, which is a heap minimum and output it
+								MergeFilesData d = mergedRuns.get(0);
+								runFileRelManager.insertTuple(d.value());
+								if (null == d.nextValue()) {//if this was the last tuple from this run, remove from list
+									mergedRuns.set(0, mergedRuns.remove(mergedRunsNo--));
+								}
+								mfdHeapifier.heapify(mergedRuns, 0, mfdComparator);
+							}
+						}
+
+						//clean up all the temporary files
+						//TODO: maybe I should do it every time after the run file gets read - this way peak disk memory consumption would be lower
+						for (String mergedFile : currentRunFiles) {
+							sm.deleteFile(mergedFile);
+						}
+						currentRunFiles.clear();
+						currentRunFiles.addAll(newRunFiles);
+						newRunFiles.clear();
+					}
+
+
+					cleanupPagedArray(arrayBufferFile);
+				}
+
+			}
+
 		} catch (Exception sme) {
 			throw new EngineException("Could not store and sort"
 					+ "intermediate files.", sme);
