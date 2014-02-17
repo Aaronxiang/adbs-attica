@@ -33,11 +33,11 @@ public class MinListHeap<T> {
 			rightChild = rightChildIdx(extremeIdx);
 
 			if (leftChild < elementsCount && //does the left child exist?
-					(-1 == comparator.compare(list.get(leftChild), list.get(extremeIdx))) ) {//the leftChild node is greater(min-heap)/smaller(max-heap) than the parent
+					(0 > comparator.compare(list.get(leftChild), list.get(extremeIdx))) ) {//the leftChild node is greater(min-heap)/smaller(max-heap) than the parent
 				extremeIdx = leftChild;
 			}
 			if (rightChild < elementsCount && //does the right child exist?
-					(-1 == comparator.compare(list.get(rightChild), list.get(extremeIdx))) ) {//the rightChild node is greater(min-heap)/smaller(max-heap) than the extreme found earlier
+					(0 > comparator.compare(list.get(rightChild), list.get(extremeIdx))) ) {//the rightChild node is greater(min-heap)/smaller(max-heap) than the extreme found earlier
 				extremeIdx = rightChild;
 			}
 
