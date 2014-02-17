@@ -240,7 +240,7 @@ public class ExternalSort extends UnaryOperator {
 		public Tuple removeAt(int idx) {
 			if (idx < size()) {// has to be less than the size
 				Tuple t = get(idx);
-				set(idx, null);// this could be optimized so that bounds are not checked inside set()
+				//set(idx, null);//you can't nullify the tuple, since canSubstitute() segfaults.
 				return t;
 			}
 			throw new IndexOutOfBoundsException();
