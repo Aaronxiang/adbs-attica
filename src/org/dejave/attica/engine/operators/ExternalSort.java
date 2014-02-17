@@ -391,10 +391,10 @@ public class ExternalSort extends UnaryOperator {
 	} // ExternalSort()
 
 	/**
-	 * Initialises the temporary files, according to the number of buffers.
+	 * Initializes the temporary files, according to the number of buffers.
 	 * 
 	 * @throws StorageManagerException
-	 *             thrown whenever the temporary files cannot be initialised.
+	 *             thrown whenever the temporary files cannot be initialized.
 	 */
 	protected void initTempFiles() throws StorageManagerException {
 		// //////////////////////////////////////////
@@ -703,8 +703,7 @@ public class ExternalSort extends UnaryOperator {
 
 							int mergedRunsNo = Math.min(currentRunFiles.size(), buffersNoForMerge);
 							for (int i = 0; i < mergedRunsNo; ++i) {
-								mergedRuns.add(
-										new MergeFilesData(currentRunFiles.remove(i), inRelation, sm));
+								mergedRuns.add(new MergeFilesData(currentRunFiles.remove(i), inRelation, sm));
 							}
 
 							mfdHeapifier.buildHeap(mergedRuns, mfdComparator);
@@ -713,25 +712,22 @@ public class ExternalSort extends UnaryOperator {
 								MergeFilesData d = mergedRuns.get(0);
 								runFileRelManager.insertTuple(d.value());
 								if (null == d.nextValue()) {//if this was the last tuple from this run, remove from list
-									mergedRuns.set(0, mergedRuns.remove(mergedRunsNo - 1));
-									--mergedRunsNo;
+									d.removeFile(sm);//clean after yourself
+									d = mergedRuns.remove(mergedRunsNo - 1);
+									if (! mergedRuns.isEmpty())
+										mergedRuns.set(0, d);
 								}
 								mfdHeapifier.heapify(mergedRuns, 0, mfdComparator);
 							}
 						}
 
-						//clean up all the temporary files
-						//TODO: maybe I should do it every time after the run file gets read - this way peak disk memory consumption would be lower
-						for (String mergedFile : currentRunFiles) {
-							sm.deleteFile(mergedFile);
-						}
-						currentRunFiles.clear();
 						currentRunFiles.addAll(newRunFiles);
 						newRunFiles.clear();
 					}
 
 
 					cleanupPagedArray(arrayBufferFile);
+					outputTuples = runFileRelManager.tuples().iterator();
 				}
 
 			}
