@@ -125,14 +125,13 @@ public class ExternalSort extends UnaryOperator {
 		int maxArrayCapacity = tuplesNoPerPage * maxPagesNo;
 
 		// create a temporary file to back-up heap memory
-		String fileName = null;
 		RelationIOManager arrayManager = null;
 		try {
-			sm.createFile(fileName);
+			sm.createFile(arrayFileName);
 			arrayManager = new RelationIOManager(sm, rel, arrayFileName);
 		} catch (StorageManagerException sme) {
 			// remove the file that has just been created and re-throw
-			try {sm.deleteFile(fileName);} catch (Exception e) {};
+			try {sm.deleteFile(arrayFileName);} catch (Exception e) {};
 			throw new EngineException("Could not instantiate " + "heap-file",
 					sme);
 		}
@@ -142,7 +141,7 @@ public class ExternalSort extends UnaryOperator {
 		try {
 			// materialize the heap file with first heapCapacity number of
 			// tuples
-			while (inOpIter.hasNext()) {
+			while (inOpIter.hasNext()) {//TODO: problem with last element
 				arrayManager.insertTuple(inOpIter.next());
 				arraySize++;
 				// can't read more than fits into the allowed buffer size
@@ -230,7 +229,7 @@ public class ExternalSort extends UnaryOperator {
 			}
 			Page page = pages[pagePosForIdx(idx)];
 			Tuple replaced = page.retrieveTuple(tuplePosForIdx(idx));
-			page.setTuple(pagePosForIdx(idx), t);
+			page.setTuple(tuplePosForIdx(idx), t);
 			return replaced;
 		}
 
@@ -239,10 +238,9 @@ public class ExternalSort extends UnaryOperator {
 		 * name changed deliberately)
 		 */
 		public Tuple removeAt(int idx) {
-			if (idx == size() - 1) {// has to be less than the size
+			if (idx < size()) {// has to be less than the size
 				Tuple t = get(idx);
-				set(idx, null);// this could be optimized so that bounds are not
-				// cheeked inside set
+				set(idx, null);// this could be optimized so that bounds are not checked inside set()
 				return t;
 			}
 			throw new IndexOutOfBoundsException();
@@ -257,12 +255,25 @@ public class ExternalSort extends UnaryOperator {
 		}
 	}
 
+	/**
+	 * Helper class used for storing data over the file to be merged.
+	 * It handles sequential read from the merge file with use of attica classes.
+	 * @author krzys
+	 */
 	static class MergeFilesData {
 		private RelationIOManager rioManager = null;
 		private Iterator<Tuple> tuplesIt = null;
 		private String fileName = null;
 		private Tuple currentValue = null;
 
+		/**
+		 * C'tor.
+		 * @param fileName - name of the file that contains run tuples;
+		 * @param rel - relation which describes the file;
+		 * @param sm - storage manager - this is reused so that we can make use of buffered pages.
+		 * @throws IOException
+		 * @throws StorageManagerException
+		 */
 		public MergeFilesData(String fileName, Relation rel, StorageManager sm) 
 				throws IOException, StorageManagerException {
 			this.rioManager = new RelationIOManager(sm, rel, fileName);
@@ -273,21 +284,44 @@ public class ExternalSort extends UnaryOperator {
 			}
 		}
 
+		/**
+		 * Removes relation file for the given instance merge file.
+		 * @param sm reference to StorageManager the instance was created with {@link MergeFilesData}
+		 * @throws StorageManagerException propagated from StorageManager::deleteFile().
+		 */
 		public void removeFile(StorageManager sm) 
 				throws StorageManagerException {
 			sm.deleteFile(fileName);
 		}
 
+		/**
+		 * @return current value pointed at the iterator.
+		 */
 		public Tuple value() {
 			return currentValue;
 		}
 
+		/**
+		 * Gets next value (if exists) from the iterator and sets it as current value.
+		 * @return next value, if iterator has ended then null.
+		 */
 		public Tuple nextValue() {
-			currentValue = tuplesIt.next();
+			if (tuplesIt.hasNext()) {
+				currentValue = tuplesIt.next();
+			}
+			else {
+				currentValue = null;
+			}
 			return currentValue;
 		}
 	}
 
+	/**
+	 * Helper class used for comparation of MergeFilesData.
+	 * It is used for building (and heapifying) a heap. Only takes care of the value of current tuple.
+	 * @author krzys
+	 *
+	 */
 	static class MFDComparator implements Comparator<MergeFilesData> {
 		TupleComparator comparator = null;
 
@@ -374,6 +408,7 @@ public class ExternalSort extends UnaryOperator {
 		//
 		// //////////////////////////////////////////
 		outputFile = FileUtil.createTempFileName();
+        sm.createFile(outputFile);
 	} // initTempFiles()
 
 	/**
@@ -538,7 +573,7 @@ public class ExternalSort extends UnaryOperator {
 			//
 			// //////////////////////////////////////////
 
-			if (true) {
+			if (false) {
 
 				Relation rel = getInputOperator().getOutputRelation();
 				RelationIOManager rMan =
@@ -576,7 +611,7 @@ public class ExternalSort extends UnaryOperator {
 
 					TupleComparator comparator = new TupleComparator(slots);
 					MinListHeap<Tuple> heapifier = new MinListHeap<Tuple>();
-					heapifier.buildHeap(buffArray, comparator);
+					heapifier.buildHeap(buffArray, heapElementsNo, comparator);
 
 					ArrayList<String> runFiles = new ArrayList<String>();
 
@@ -588,43 +623,38 @@ public class ExternalSort extends UnaryOperator {
 						sm.createFile(runFile);
 						RelationIOManager runRIOMgr = new RelationIOManager(sm, inRelation, runFile);
 
-						//take root (smallest element) and insert in run file
-						Tuple lastTuple = buffArray.get(0);
-						runRIOMgr.insertTuple(lastTuple);
-
+						Tuple lastOutTuple = null;//last tuple that was output to the output page
+						Tuple newInTuple = null;//tuple taken from the input page
 						while (0 != heapElementsNo) {//while current run is ongoing
-							Tuple newTuple = null;
+							//take minimum element and output to run file
+							lastOutTuple = buffArray.removeAt(0);
+							runRIOMgr.insertTuple(lastOutTuple);
+							
 							if (opTupIter.hasNext()) 
-								newTuple = opTupIter.next();
+								newInTuple = opTupIter.next();
 
 							//if there is another input tuple, read it
-							if (null != newTuple) {
-								int cmpRet = comparator.compare(lastTuple, newTuple);
-								if (0 == cmpRet) {//if is the same as previous output one, put it to the output straightaway
-									runRIOMgr.insertTuple(newTuple);
-								}
-								else if (cmpRet < 0) {//new tuple is smaller, put to the next run
+							if (null != newInTuple) {//NOTE: can we do this with hasNext() instead of checking for null?!
+								int cmpRet = comparator.compare(lastOutTuple, newInTuple);
+								if (cmpRet > 0) {//new tuple is smaller, put to the next run
 									nextRunStartIdx--;
 									heapElementsNo--;
 									//evicted tuple will never be null - since we keep the array full
-									Tuple evictedTuple = buffArray.set(nextRunStartIdx, newTuple);
+									Tuple evictedTuple = buffArray.set(nextRunStartIdx, newInTuple);
 									buffArray.set(0, evictedTuple);
 								}
 								else {//tuple bigger, could be used in a current run
-									buffArray.set(0, newTuple);
+									buffArray.set(0, newInTuple);
 								}							
 							}
 							else {//no more input
-								Tuple lastHeapTuple = buffArray.get(heapElementsNo - 1);
+								Tuple lastHeapTuple = buffArray.removeAt(heapElementsNo - 1);
 								buffArray.set(0, lastHeapTuple);
 								heapElementsNo--;
 							}
 
 							//preserve heap property
 							heapifier.heapify(buffArray, 0, heapElementsNo, comparator);
-							//take minimum element and output to run file
-							lastTuple = buffArray.get(0);
-							runRIOMgr.insertTuple(lastTuple);
 						}
 
 						if (buffArray.size() == nextRunStartIdx) {//no more input, no elements for a next run
@@ -650,7 +680,7 @@ public class ExternalSort extends UnaryOperator {
 					ArrayList<String> currentRunFiles = runFiles;
 					ArrayList<String> newRunFiles = new ArrayList<String>();	
 					RelationIOManager runFileRelManager = null;
-					final int buffersNoForMerge = buffers - 1;
+					final int buffersNoForMerge = buffers - 1;//there is one output page and others may be used for input runs
 					ArrayList<MergeFilesData> mergedRuns = new ArrayList<ExternalSort.MergeFilesData>();
 					MFDComparator mfdComparator = new MFDComparator(comparator);
 					MinListHeap<MergeFilesData> mfdHeapifier = new MinListHeap<ExternalSort.MergeFilesData>();
@@ -679,11 +709,12 @@ public class ExternalSort extends UnaryOperator {
 
 							mfdHeapifier.buildHeap(mergedRuns, mfdComparator);
 							while (! mergedRuns.isEmpty()) {
-								//take heap root, which is a heap minimum and output it
+								//take heap root (minimum element) and output it
 								MergeFilesData d = mergedRuns.get(0);
 								runFileRelManager.insertTuple(d.value());
 								if (null == d.nextValue()) {//if this was the last tuple from this run, remove from list
-									mergedRuns.set(0, mergedRuns.remove(mergedRunsNo--));
+									mergedRuns.set(0, mergedRuns.remove(mergedRunsNo - 1));
+									--mergedRunsNo;
 								}
 								mfdHeapifier.heapify(mergedRuns, 0, mfdComparator);
 							}

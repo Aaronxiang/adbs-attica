@@ -1215,17 +1215,19 @@ public class PlanBuilder {
                 // this is an example with 10 buffers
                 //
                 ///////////////////////////////////////////
-                /*
-                int bufferPages = sm.getNumberOfBufferPoolPages();
-                int half = bufferPages / 2;
-                ExternalSort es =
-                    new ExternalSort(operator, sm, slots,
-                                     half > 10 ? half : 10);
-                return es;
-                */
-                ///////////////////////////////////////////
-                NullUnaryOperator nullop = new NullUnaryOperator(operator);
-                return nullop;
+                if (true) {
+                	int bufferPages = sm.getNumberOfBufferPoolPages();
+                	int half = bufferPages / 2;
+                	ExternalSort es =
+                			new ExternalSort(operator, sm, slots,
+                					half > 10 ? half : 10);
+                	return es;
+                }
+                else {
+                	///////////////////////////////////////////
+                	NullUnaryOperator nullop = new NullUnaryOperator(operator);
+                	return nullop;
+                }
             }
             else {
                 // just in case the sky falls
