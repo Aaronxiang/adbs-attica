@@ -234,10 +234,12 @@ public class ExternalSort extends UnaryOperator {
 		}
 
 		/**
-		 * Removes element at the position idx, setting it to null. (remove()
-		 * name changed deliberately)
+		 * Removes element at the position idx, setting it to null. (AbstractList::remove()
+		 * name changed deliberately, since array cell is not removed).
+		 * NOTE: method disabled, since we can't use set(idx, null)
 		 */
-		public Tuple removeAt(int idx) {
+		/*
+		 * public Tuple removeAt(int idx) {
 			if (idx < size()) {// has to be less than the size
 				Tuple t = get(idx);
 				//set(idx, null);//you can't nullify the tuple, since canSubstitute() segfaults.
@@ -245,6 +247,7 @@ public class ExternalSort extends UnaryOperator {
 			}
 			throw new IndexOutOfBoundsException();
 		}
+		*/
 
 		/**
 		 * Returns total number of elements that can be stored in this array.
@@ -317,7 +320,7 @@ public class ExternalSort extends UnaryOperator {
 	}
 
 	/**
-	 * Helper class used for comparation of MergeFilesData.
+	 * Helper class used for comparison of MergeFilesData.
 	 * It is used for building (and heapifying) a heap. Only takes care of the value of current tuple.
 	 * @author krzys
 	 *
@@ -627,7 +630,7 @@ public class ExternalSort extends UnaryOperator {
 						Tuple newInTuple = null;//tuple taken from the input page
 						while (0 != heapElementsNo) {//while current run is ongoing
 							//take minimum element and output to run file
-							lastOutTuple = buffArray.removeAt(0);
+							lastOutTuple = buffArray.get(0);
 							runRIOMgr.insertTuple(lastOutTuple);
 							
 							if (opTupIter.hasNext()) 
@@ -648,9 +651,9 @@ public class ExternalSort extends UnaryOperator {
 								}							
 							}
 							else {//no more input
-								Tuple lastHeapTuple = buffArray.removeAt(heapElementsNo - 1);
+								Tuple lastHeapTuple = buffArray.get(heapElementsNo - 1);
 								buffArray.set(0, lastHeapTuple);
-								heapElementsNo--;
+								--heapElementsNo;
 							}
 
 							//preserve heap property
