@@ -40,334 +40,6 @@ import com.sun.org.apache.bcel.internal.generic.NEWARRAY;
  */
 public class ExternalSort extends UnaryOperator {
 
-	/**
-	 * Helper class for comparing tuples given the slots (and slots) order to compare with.
-	 * 
-	 * @author krzys
-	 * 
-	 */
-	private static class TupleComparator implements Comparator<Tuple> {
-		private int[] slots;
-
-		public TupleComparator(int[] slots) {
-			this.slots = slots;
-		}
-
-		public int compare(Tuple first, Tuple second) {
-			int ret = 0;
-			for (int i = 0; i < slots.length; ++i) {
-				ret = first.getValue(slots[i]).compareTo(
-						second.getValue(slots[i]));
-				if (0 != ret)
-					break;
-			}
-
-			return ret;
-		}
-	}
-
-	/**
-	 * Iterator like wrapper to go over the tuples pulled from Operator.
-	 * It encapsulates Operator behaviour of possible return of null tuples (discard) and EOF tuple (done).
-	 * NOTE: It doesn't implement Iterator, since on next() invocation exception could be thrown, 
-	 * which is not possible with iterators.
-	 * 
-	 * @author krzys
-	 * 
-	 */
-	private static class OperatorTuplesIterator /* implements Iterator<Tuple> */{
-		private Tuple lastTuple = null;
-		private boolean hasNxt = false;
-		private Operator op = null;
-
-		public OperatorTuplesIterator(Operator operator) throws EngineException {
-			op = operator;
-			// no worries, first tuple returned by next is null
-			next();
-		}
-
-		public boolean hasNext() {
-			return hasNxt;
-		}
-
-		public Tuple next() throws EngineException {
-			Tuple t = lastTuple;
-			// iterate until non-null tuple is gotten
-			// !NOTE: why does the tuple may be null?
-			while (true) {
-				lastTuple = op.getNext();
-				if (null != lastTuple) {
-					hasNxt = !(lastTuple instanceof EndOfStreamTuple);
-					break;
-				}
-			}
-			return t;
-		}
-
-		/**
-		 * Method added so that one can peek what value was last read on {@link OperatorTuplesIterator::next()} invocation.
-		 * @return
-		 */
-		public Tuple peek() {
-			return lastTuple;
-		}
-	}
-
-	/**
-	 * Helper class to get results of @link createPagedArray() method.
-	 * @author krzys
-	 *
-	 */
-	public static class ArrayCreationResult {
-		int elemsNoRead = 0;
-		PagedArray array = null;
-
-		public ArrayCreationResult(int elemsNoRead, PagedArray array) {
-			this.elemsNoRead = elemsNoRead;
-			this.array = array;
-		}
-	};
-
-	/**
-	 * 
-	 * @param tupleSize
-	 * @param pageSize
-	 * @param maxPagesNo
-	 * @param rel
-	 * @param sm
-	 * @param arrayFileName
-	 * @param inOpIter
-	 * @return
-	 * @throws EngineException
-	 */
-	public static ArrayCreationResult createPagedArray(int tupleSize,
-			int pageSize, int maxPagesNo, Relation rel, StorageManager sm,
-			String arrayFileName, OperatorTuplesIterator inOpIter)
-					throws EngineException {
-		int tuplesNoPerPage = pageSize / tupleSize;
-		int maxArrayCapacity = tuplesNoPerPage * maxPagesNo;
-
-		// create a temporary file to back-up heap memory
-		RelationIOManager arrayManager = null;
-		try {
-			sm.createFile(arrayFileName);
-			arrayManager = new RelationIOManager(sm, rel, arrayFileName);
-		} catch (StorageManagerException sme) {
-			// remove the file that has just been created and re-throw
-			try {sm.deleteFile(arrayFileName);} catch (Exception e) {};
-			throw new EngineException("Could not instantiate " + "heap-file",
-					sme);
-		}
-
-		int arraySize = 0;
-		Page pages[] = null;
-		try {
-			// materialize the heap file with first heapCapacity number of tuples
-			while (inOpIter.hasNext()) {
-				arrayManager.insertTuple(inOpIter.next());
-				arraySize++;
-				// can't read more than fits into the allowed buffer size
-				if (arraySize >= maxArrayCapacity)
-					break;
-			}
-
-			// claim (store references of) all necessary pages
-			// it handles the case, when there was less tuples read than memory
-			// available - the array will just use less pages than provided
-			Iterator<Page> pagesIt = arrayManager.pages().iterator();
-			int realPagesNo = (int) Math
-					.ceil(1.0 * arraySize / tuplesNoPerPage);
-			pages = new Page[realPagesNo];
-			for (int i = 0; i < realPagesNo; ++i) {
-				pages[i] = pagesIt.next();
-			}
-		} catch (Exception sme) {
-			throw new EngineException("Couldn't initialize the array file", sme);
-		}
-
-		return new ArrayCreationResult(arraySize, new PagedArray(
-				tuplesNoPerPage, arraySize * tuplesNoPerPage, pages));
-	}
-
-	/**
-	 * Call this method before reference to this class is dropped. The temporary
-	 * file gets deleted.
-	 * 
-	 * @throws EngineException
-	 */
-	public void cleanupPagedArray(String fileName) throws EngineException {
-		try {
-			sm.deleteFile(fileName);
-		} catch (StorageManagerException sme) {
-			throw new EngineException("Could not clean up array file", sme);
-		}
-	}
-
-	/**
-	 * Wrapper that enables for accessing tuples in in-memory array of Pages as if they were stored 
-	 * in an array. 
-	 * It extends AbstractList, so that it can be used with MinListHeap, but it doesn't shrinks or
-	 * extends like lists.
-	 * @author krzys
-	 *
-	 */
-	private static class PagedArray extends AbstractList<Tuple> {
-		// calculated number of tuples per page
-		int tuplesNoPerPage = 0;
-		// number of tuples that may be stored in the buffer created
-		int arrayCapacity = 0;
-		// keeps pointers to Pages that constitute to this array
-		Page pages[] = null;
-
-		public PagedArray(int tuplesNoPerPage, int arrayCapacity,
-				Page pages[]) throws EngineException {
-			this.tuplesNoPerPage = tuplesNoPerPage;
-			this.arrayCapacity = arrayCapacity;
-			this.pages = pages;
-		}
-
-		/**
-		 * Returns index of a page where tuple of index idx exists;
-		 */
-		private int pagePosForIdx(int idx) {
-			return idx / tuplesNoPerPage;
-		}
-
-		/**
-		 * Returns index of tuple of index idx, within a page ({@link
-		 * pagePosForIdx()}
-		 */
-		private int tuplePosForIdx(int idx) {
-			return idx % tuplesNoPerPage;
-		}
-
-		@Override
-		public Tuple get(int idx) {
-			if (idx < 0 || idx >= size()) {
-				throw new IndexOutOfBoundsException();
-			}
-			Page page = pages[pagePosForIdx(idx)];
-			return page.retrieveTuple(tuplePosForIdx(idx));
-		}
-
-		@Override
-		public Tuple set(int idx, Tuple t) {
-			if (idx < 0 || idx >= size()) {
-				throw new IndexOutOfBoundsException();
-			}
-			Page page = pages[pagePosForIdx(idx)];
-			Tuple replaced = page.retrieveTuple(tuplePosForIdx(idx));
-			page.setTuple(tuplePosForIdx(idx), t);
-			return replaced;
-		}
-
-		/**
-		 * Removes element at the position idx, setting it to null. (AbstractList::remove()
-		 * name changed deliberately, since array cell is not removed).
-		 * NOTE: method disabled, since we can't use set(idx, null) - Page::setTuple() doesn't like nulls, which is sensible.
-		 */
-		/*
-		 * public Tuple removeAt(int idx) {
-			if (idx < size()) {// has to be less than the size
-				Tuple t = get(idx);
-				//set(idx, null);//you can't nullify the tuple, since canSubstitute() segfaults.
-				return t;
-			}
-			throw new IndexOutOfBoundsException();
-		}
-		*/
-
-		/**
-		 * Returns total number of elements that can be stored in this array.
-		 */
-		@Override
-		public int size() {
-			return arrayCapacity;
-		}
-	}
-
-	/**
-	 * Helper class used for storing data over the file to be merged (merge part of the sorting algorithm).
-	 * It handles sequential read from the merge file with use of attica classes.
-	 * @author krzys
-	 */
-	static class MergeFilesData {
-		//file name which this class is responsible for
-		private String fileName = null;
-		//points to the file 
-		private RelationIOManager rioManager = null;
-		private Iterator<Tuple> tuplesIt = null;
-		private Tuple currentValue = null;
-
-		/**
-		 * C'tor.
-		 * @param fileName - name of the file that contains run tuples;
-		 * @param rel - relation which describes the file;
-		 * @param sm - storage manager - this is reused so that we can make use of buffered pages.
-		 * @throws IOException
-		 * @throws StorageManagerException
-		 */
-		public MergeFilesData(String fileName, Relation rel, StorageManager sm) 
-				throws IOException, StorageManagerException {
-			this.rioManager = new RelationIOManager(sm, rel, fileName);
-			this.tuplesIt = rioManager.tuples().iterator();
-			this.fileName = fileName;
-			if (tuplesIt.hasNext()) {
-				currentValue = tuplesIt.next();
-			}
-		}
-
-		/**
-		 * Removes relation file for the given instance merge file.
-		 * @param sm reference to StorageManager the instance was created with {@link MergeFilesData}
-		 * @throws StorageManagerException propagated from StorageManager::deleteFile().
-		 */
-		public void removeFile(StorageManager sm) 
-				throws StorageManagerException {
-			sm.deleteFile(fileName);
-		}
-
-		/**
-		 * @return current value pointed at the iterator.
-		 */
-		public Tuple value() {
-			return currentValue;
-		}
-
-		/**
-		 * Gets next value (if exists) from the iterator and sets it as current value.
-		 * @return next value, if iterator has ended then null.
-		 */
-		public Tuple nextValue() {
-			if (tuplesIt.hasNext()) {
-				currentValue = tuplesIt.next();
-			}
-			else {
-				currentValue = null;
-			}
-			return currentValue;
-		}
-	}
-
-	/**
-	 * Helper class used for comparison of MergeFilesData.
-	 * It is used for building (and heapifying) a heap. Only takes care of the value of current tuple.
-	 * @author krzys
-	 *
-	 */
-	static class MFDComparator implements Comparator<MergeFilesData> {
-		TupleComparator comparator = null;
-
-		public MFDComparator(TupleComparator comparator) {
-			this.comparator = comparator;
-		}
-
-		@Override
-		public int compare(MergeFilesData v1, MergeFilesData v2) {
-			return comparator.compare(v1.value(), v1.value());
-		}
-	}
-
 	/** The storage manager for this operator. */
 	private StorageManager sm;
 
@@ -394,18 +66,11 @@ public class ExternalSort extends UnaryOperator {
 	/**
 	 * Constructs a new external sort operator.
 	 * 
-	 * @param operator
-	 *            the input operator.
-	 * @param sm
-	 *            the storage manager.
-	 * @param slots
-	 *            the indexes of the sort keys.
-	 * @param buffers
-	 *            the number of buffers (i.e., run files) to be used for the
-	 *            sort.
-	 * @throws EngineException
-	 *             thrown whenever the sort operator cannot be properly
-	 *             initialized.
+	 * @param operator the input operator.
+	 * @param sm the storage manager.
+	 * @param slots the indexes of the sort keys.
+	 * @param buffers the number of buffers (i.e., run files) to be used for the sort.
+	 * @throws EngineException thrown whenever the sort operator cannot be properly initialized.
 	 */
 	public ExternalSort(Operator operator, StorageManager sm, int[] slots,
 			int buffers) throws EngineException {
@@ -634,15 +299,27 @@ public class ExternalSort extends UnaryOperator {
 					
 					outputTuples = outFileRelManager.tuples().iterator();
 				}
+				else {
+					//how can that happen?
+				}
 
 			}
 
 		} catch (Exception sme) {
-			throw new EngineException("Could not store and sort"
-					+ "intermediate files.", sme);
+			throw new EngineException("Could not execute selection replacement sort.", sme);
 		}
 	} // setup()
 
+	
+	
+	/**
+	 * Creates a bunch of temporary, sorted files. 
+	 * @param inRelation relation to which schema incomming tuples conform to;
+	 * @param opTupIter iterator over input operator's tuples stream;
+	 * @return list of the temporary run files.
+	 * @throws EngineException
+	 * @throws StorageManagerException
+	 */
 	private ArrayList<String> createRunFiles(Relation inRelation,
 			OperatorTuplesIterator opTupIter) throws EngineException,
 			StorageManagerException {
@@ -727,6 +404,14 @@ public class ExternalSort extends UnaryOperator {
 		return runFiles;
 	}
 
+	/**
+	 * Writes sorted sequence of tuples to the output file, given a list of run files of sorted tuples.
+	 * @param inRelation relation to which schema all the files conform to;
+	 * @param runFiles list of files to be merged.
+	 * @return RelationIOManager reference to the output file.
+	 * @throws IOException
+	 * @throws StorageManagerException
+	 */
 	private RelationIOManager mergeRunFiles(Relation inRelation, ArrayList<String> runFiles)
 			throws IOException, StorageManagerException {
 		RelationIOManager runFileRelManager = null;
@@ -789,13 +474,6 @@ public class ExternalSort extends UnaryOperator {
 		try {
 			// //////////////////////////////////////////
 			//
-			// make sure you delete the intermediate
-			// files after sorting is done
-			//
-			// //////////////////////////////////////////
-
-			// //////////////////////////////////////////
-			//
 			// right now, only the output file is
 			// deleted
 			//
@@ -838,13 +516,348 @@ public class ExternalSort extends UnaryOperator {
 	/**
 	 * Operator class abstract interface -- sets the ouput relation of this sort
 	 * operator.
-	 * 
 	 * @return this operator's output relation.
 	 * @throws EngineException
 	 *             whenever the output relation of this operator cannot be set.
 	 */
 	protected Relation setOutputRelation() throws EngineException {
 		return new Relation(getInputOperator().getOutputRelation());
-	} // setOutputRelation()
+	} // setOutputRela
 
+	/**
+	 * Helper class for comparing tuples given the slots (and slots) order to compare with.
+	 * @author krzys
+	 * 
+	 */
+	private static class TupleComparator implements Comparator<Tuple> {
+		private int[] slots;
+
+		public TupleComparator(int[] slots) {
+			this.slots = slots;
+		}
+
+		public int compare(Tuple first, Tuple second) {
+			int ret = 0;
+			for (int i = 0; i < slots.length; ++i) {
+				ret = first.getValue(slots[i]).compareTo(
+						second.getValue(slots[i]));
+				if (0 != ret)
+					break;
+			}
+
+			return ret;
+		}
+	}
+
+	/**
+	 * Iterator-like wrapper to go over the tuples pulled from Operator.
+	 * It encapsulates Operator behaviour of possible return of null tuples (discard) and EOF tuple (done).
+	 * NOTE: It doesn't implement Iterator, since on next() invocation exception could be thrown, 
+	 * which is not possible with iterators.
+	 * 
+	 * @author krzys
+	 * 
+	 */
+	private static class OperatorTuplesIterator /* implements Iterator<Tuple> */{
+		private Tuple lastTuple = null;
+		private boolean hasNxt = false;
+		private Operator op = null;
+
+		public OperatorTuplesIterator(Operator operator) throws EngineException {
+			op = operator;
+			// no worries, first tuple returned by next is null
+			next();
+		}
+
+		/**
+		 * Indicates if there is new tuple in a stream.
+		 * @return
+		 */
+		public boolean hasNext() {
+			return hasNxt;
+		}
+
+		/**
+		 * Polls for a next tuple and returns new result.
+		 * @return
+		 * @throws EngineException
+		 */
+		public Tuple next() throws EngineException {
+			Tuple t = lastTuple;
+			// iterate until non-null tuple is gotten
+			// !NOTE: why does the tuple may be null?
+			while (true) {
+				lastTuple = op.getNext();
+				if (null != lastTuple) {
+					hasNxt = !(lastTuple instanceof EndOfStreamTuple);
+					break;
+				}
+			}
+			return t;
+		}
+
+		/**
+		 * Method added so that one can peek what value was last read on {@link OperatorTuplesIterator::next()} invocation.
+		 * @return
+		 */
+		public Tuple peek() {
+			return lastTuple;
+		}
+	}
+
+	/**
+	 * Helper class to get results of @link createPagedArray() method.
+	 * @author krzys
+	 *
+	 */
+	public static class ArrayCreationResult {
+		int elemsNoRead = 0;
+		PagedArray array = null;
+
+		public ArrayCreationResult(int elemsNoRead, PagedArray array) {
+			this.elemsNoRead = elemsNoRead;
+			this.array = array;
+		}
+	};
+
+	/**
+	 * Creates an array like structure backed up with attica paged file (arrayFileName).
+	 * The array gets filled with maxPagesNo number of pages read from inOpIter (or less if there are not that many of them).
+	 * @param tupleSize size of each tuple (in bytes) stored in the array to be created;
+	 * @param pageSize size of the page in bytes;
+	 * @param maxPagesNo maximum number of pages that the array may consist of;
+	 * @param rel relation to which schema tuples conform to;
+	 * @param sm storage manager reference;
+	 * @param arrayFileName name of the file to which array tuples may be written to;
+	 * @param inOpIter iterator over the input tuples;
+	 * @return result of the array creation.
+	 * @throws EngineException
+	 */
+	public static ArrayCreationResult createPagedArray(int tupleSize,
+			int pageSize, int maxPagesNo, Relation rel, StorageManager sm,
+			String arrayFileName, OperatorTuplesIterator inOpIter)
+					throws EngineException {
+		int tuplesNoPerPage = pageSize / tupleSize;
+		int maxArrayCapacity = tuplesNoPerPage * maxPagesNo;
+
+		// create a temporary file to back-up heap memory
+		RelationIOManager arrayManager = null;
+		try {
+			sm.createFile(arrayFileName);
+			arrayManager = new RelationIOManager(sm, rel, arrayFileName);
+		} catch (StorageManagerException sme) {
+			// remove the file that has just been created and re-throw
+			try {sm.deleteFile(arrayFileName);} catch (Exception e) {};
+			throw new EngineException("Could not instantiate " + "heap-file",
+					sme);
+		}
+
+		int arraySize = 0;
+		Page pages[] = null;
+		try {
+			// materialize the heap file with first heapCapacity number of tuples
+			while (inOpIter.hasNext()) {
+				arrayManager.insertTuple(inOpIter.next());
+				arraySize++;
+				// can't read more than fits into the allowed buffer size
+				if (arraySize >= maxArrayCapacity)
+					break;
+			}
+
+			// claim (store references of) all necessary pages
+			// it handles the case, when there was less tuples read than memory
+			// available - the array will just use less pages than provided
+			Iterator<Page> pagesIt = arrayManager.pages().iterator();
+			int realPagesNo = (int) Math
+					.ceil(1.0 * arraySize / tuplesNoPerPage);
+			pages = new Page[realPagesNo];
+			for (int i = 0; i < realPagesNo; ++i) {
+				pages[i] = pagesIt.next();
+			}
+		} catch (Exception sme) {
+			throw new EngineException("Couldn't initialize the array file", sme);
+		}
+
+		return new ArrayCreationResult(arraySize, new PagedArray(
+				tuplesNoPerPage, arraySize * tuplesNoPerPage, pages));
+	}
+
+	/**
+	 * Call this method before reference to this class is dropped. The temporary
+	 * file gets deleted.
+	 * 
+	 * @throws EngineException
+	 */
+	public void cleanupPagedArray(String fileName) throws EngineException {
+		try {
+			sm.deleteFile(fileName);
+		} catch (StorageManagerException sme) {
+			throw new EngineException("Could not clean up array file", sme);
+		}
+	}
+
+	/**
+	 * Wrapper that enables for accessing tuples in in-memory array of Pages as if they were stored 
+	 * in an array. 
+	 * It extends AbstractList, so that it can be used with MinListHeap, but it doesn't shrinks or
+	 * extends like lists.
+	 * @author krzys
+	 *
+	 */
+	private static class PagedArray extends AbstractList<Tuple> {
+		// calculated number of tuples per page
+		int tuplesNoPerPage = 0;
+		// number of tuples that may be stored in the buffer created
+		int arrayCapacity = 0;
+		// keeps pointers to Pages that constitute to this array
+		Page pages[] = null;
+
+		public PagedArray(int tuplesNoPerPage, int arrayCapacity,
+				Page pages[]) throws EngineException {
+			this.tuplesNoPerPage = tuplesNoPerPage;
+			this.arrayCapacity = arrayCapacity;
+			this.pages = pages;
+		}
+
+		/**
+		 * Returns index of a page where tuple of index idx exists;
+		 */
+		private int pagePosForIdx(int idx) {
+			return idx / tuplesNoPerPage;
+		}
+
+		/**
+		 * Returns index of tuple of index idx, within a page ({@link pagePosForIdx()}
+		 */
+		private int tuplePosForIdx(int idx) {
+			return idx % tuplesNoPerPage;
+		}
+
+		@Override
+		public Tuple get(int idx) {
+			if (idx < 0 || idx >= size()) {
+				throw new IndexOutOfBoundsException();
+			}
+			Page page = pages[pagePosForIdx(idx)];
+			return page.retrieveTuple(tuplePosForIdx(idx));
+		}
+
+		@Override
+		public Tuple set(int idx, Tuple t) {
+			if (idx < 0 || idx >= size()) {
+				throw new IndexOutOfBoundsException();
+			}
+			Page page = pages[pagePosForIdx(idx)];
+			Tuple replaced = page.retrieveTuple(tuplePosForIdx(idx));
+			page.setTuple(tuplePosForIdx(idx), t);
+			return replaced;
+		}
+
+		/**
+		 * Removes element at the position idx, setting it to null. (AbstractList::remove()
+		 * name changed deliberately, since array cell is not removed).
+		 * NOTE: method disabled, since we can't use set(idx, null) - Page::setTuple() doesn't like nulls, which is sensible.
+		 */
+		/*
+		 * public Tuple removeAt(int idx) {
+			if (idx < size()) {// has to be less than the size
+				Tuple t = get(idx);
+				//set(idx, null);//you can't nullify the tuple, since canSubstitute() segfaults.
+				return t;
+			}
+			throw new IndexOutOfBoundsException();
+		}
+		*/
+
+		/**
+		 * Returns total number of elements that can be stored in this array.
+		 */
+		@Override
+		public int size() {
+			return arrayCapacity;
+		}
+	}
+
+	/**
+	 * Helper class used for storing data over the file to be merged (merge part of the sorting algorithm).
+	 * It handles sequential read from the merge file with use of attica classes.
+	 * @author krzys
+	 */
+	static class MergeFilesData {
+		//file name which this class is responsible for
+		private String fileName = null;
+		//points to the file 
+		private RelationIOManager rioManager = null;
+		private Iterator<Tuple> tuplesIt = null;
+		private Tuple currentValue = null;
+
+		/**
+		 * C'tor.
+		 * @param fileName - name of the file that contains run tuples;
+		 * @param rel - relation which describes the file;
+		 * @param sm - storage manager - this is reused so that we can make use of buffered pages.
+		 * @throws IOException
+		 * @throws StorageManagerException
+		 */
+		public MergeFilesData(String fileName, Relation rel, StorageManager sm) 
+				throws IOException, StorageManagerException {
+			this.rioManager = new RelationIOManager(sm, rel, fileName);
+			this.tuplesIt = rioManager.tuples().iterator();
+			this.fileName = fileName;
+			if (tuplesIt.hasNext()) {
+				currentValue = tuplesIt.next();
+			}
+		}
+
+		/**
+		 * Removes relation file for the given instance merge file.
+		 * @param sm reference to StorageManager the instance was created with {@link MergeFilesData}
+		 * @throws StorageManagerException propagated from StorageManager::deleteFile().
+		 */
+		public void removeFile(StorageManager sm) 
+				throws StorageManagerException {
+			sm.deleteFile(fileName);
+		}
+
+		/**
+		 * @return current value pointed at the iterator.
+		 */
+		public Tuple value() {
+			return currentValue;
+		}
+
+		/**
+		 * Gets next value (if exists) from the iterator and sets it as current value.
+		 * @return next value, if iterator has ended then null.
+		 */
+		public Tuple nextValue() {
+			if (tuplesIt.hasNext()) {
+				currentValue = tuplesIt.next();
+			}
+			else {
+				currentValue = null;
+			}
+			return currentValue;
+		}
+	}
+
+	/**
+	 * Helper class used for comparison of MergeFilesData.
+	 * It is used for building (and heapifying) a heap. Only takes care of the value of current tuple.
+	 * @author krzys
+	 *
+	 */
+	static class MFDComparator implements Comparator<MergeFilesData> {
+		TupleComparator comparator = null;
+
+		public MFDComparator(TupleComparator comparator) {
+			this.comparator = comparator;
+		}
+
+		@Override
+		public int compare(MergeFilesData v1, MergeFilesData v2) {
+			return comparator.compare(v1.value(), v1.value());
+		}
+	}
+	
 } // ExternalSort
