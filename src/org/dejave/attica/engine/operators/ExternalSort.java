@@ -41,7 +41,7 @@ import com.sun.org.apache.bcel.internal.generic.NEWARRAY;
 public class ExternalSort extends UnaryOperator {
 
 	/**
-	 * Class that takes care of comparing tuples.
+	 * Helper class for comparing tuples given the slots (and slots) order to compare with.
 	 * 
 	 * @author krzys
 	 * 
@@ -67,8 +67,10 @@ public class ExternalSort extends UnaryOperator {
 	}
 
 	/**
-	 * Don't implement Iterator, since every next() could throw exception, which
-	 * iterators don't handle
+	 * Iterator like wrapper to go over the tuples pulled from Operator.
+	 * It encapsulates Operator behaviour of possible return of null tuples (discard) and EOF tuple (done).
+	 * NOTE: It doesn't implement Iterator, since on next() invocation exception could be thrown, 
+	 * which is not possible with iterators.
 	 * 
 	 * @author krzys
 	 * 
@@ -102,11 +104,20 @@ public class ExternalSort extends UnaryOperator {
 			return t;
 		}
 
+		/**
+		 * Method added so that one can peek what value was last read on {@link OperatorTuplesIterator::next()} invocation.
+		 * @return
+		 */
 		public Tuple peek() {
 			return lastTuple;
 		}
 	}
 
+	/**
+	 * Helper class to get results of @link createPagedArray() method.
+	 * @author krzys
+	 *
+	 */
 	public static class ArrayCreationResult {
 		int elemsNoRead = 0;
 		PagedArray array = null;
@@ -117,6 +128,18 @@ public class ExternalSort extends UnaryOperator {
 		}
 	};
 
+	/**
+	 * 
+	 * @param tupleSize
+	 * @param pageSize
+	 * @param maxPagesNo
+	 * @param rel
+	 * @param sm
+	 * @param arrayFileName
+	 * @param inOpIter
+	 * @return
+	 * @throws EngineException
+	 */
 	public static ArrayCreationResult createPagedArray(int tupleSize,
 			int pageSize, int maxPagesNo, Relation rel, StorageManager sm,
 			String arrayFileName, OperatorTuplesIterator inOpIter)
@@ -139,9 +162,8 @@ public class ExternalSort extends UnaryOperator {
 		int arraySize = 0;
 		Page pages[] = null;
 		try {
-			// materialize the heap file with first heapCapacity number of
-			// tuples
-			while (inOpIter.hasNext()) {//TODO: problem with last element
+			// materialize the heap file with first heapCapacity number of tuples
+			while (inOpIter.hasNext()) {
 				arrayManager.insertTuple(inOpIter.next());
 				arraySize++;
 				// can't read more than fits into the allowed buffer size
@@ -169,7 +191,7 @@ public class ExternalSort extends UnaryOperator {
 
 	/**
 	 * Call this method before reference to this class is dropped. The temporary
-	 * file is deleted.
+	 * file gets deleted.
 	 * 
 	 * @throws EngineException
 	 */
@@ -181,13 +203,19 @@ public class ExternalSort extends UnaryOperator {
 		}
 	}
 
+	/**
+	 * Wrapper that enables for accessing tuples in in-memory array of Pages as if they were stored 
+	 * in an array. 
+	 * It extends AbstractList, so that it can be used with MinListHeap, but it doesn't shrinks or
+	 * extends like lists.
+	 * @author krzys
+	 *
+	 */
 	private static class PagedArray extends AbstractList<Tuple> {
 		// calculated number of tuples per page
 		int tuplesNoPerPage = 0;
 		// number of tuples that may be stored in the buffer created
 		int arrayCapacity = 0;
-		// stores the filename of the materialized array structure
-		// String arrayFile = null;
 		// keeps pointers to Pages that constitute to this array
 		Page pages[] = null;
 
@@ -236,7 +264,7 @@ public class ExternalSort extends UnaryOperator {
 		/**
 		 * Removes element at the position idx, setting it to null. (AbstractList::remove()
 		 * name changed deliberately, since array cell is not removed).
-		 * NOTE: method disabled, since we can't use set(idx, null)
+		 * NOTE: method disabled, since we can't use set(idx, null) - Page::setTuple() doesn't like nulls, which is sensible.
 		 */
 		/*
 		 * public Tuple removeAt(int idx) {
@@ -259,14 +287,16 @@ public class ExternalSort extends UnaryOperator {
 	}
 
 	/**
-	 * Helper class used for storing data over the file to be merged.
+	 * Helper class used for storing data over the file to be merged (merge part of the sorting algorithm).
 	 * It handles sequential read from the merge file with use of attica classes.
 	 * @author krzys
 	 */
 	static class MergeFilesData {
+		//file name which this class is responsible for
+		private String fileName = null;
+		//points to the file 
 		private RelationIOManager rioManager = null;
 		private Iterator<Tuple> tuplesIt = null;
-		private String fileName = null;
 		private Tuple currentValue = null;
 
 		/**
