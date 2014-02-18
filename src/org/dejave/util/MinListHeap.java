@@ -7,10 +7,10 @@ import java.util.Comparator;
 
 public class MinListHeap<T> {	
 	/**
-	 * 
-	 * @param list
-	 * @param nodeIdx
-	 * @param comparator
+	 * Preserves heap property at the node of nodeIdx.
+	 * @param list to be heapified at position nodeIdx;
+	 * @param nodeIdx - position of the node to heapify;
+	 * @param comparator comparator used for nodes comparison.
 	 */
 	public void heapify(AbstractList<T> list, int nodeIdx, Comparator<T> comparator) {
 		heapify(list, list.size(), nodeIdx, comparator);
@@ -54,16 +54,20 @@ public class MinListHeap<T> {
 
 	}
 
+	/**
+	 * Converts entire list to heap.
+	 * @param list to be converted to heap;
+	 * @param comparator used for list elements comparison.
+	 */
 	public void buildHeap(AbstractList<T> list, Comparator<T> comparator) {
 		buildHeap(list, list.size(), comparator);
 	}
 
 	/**
-	 * 
-	 * @param array
-	 * @param elementsCount
-	 * @param comparator
-	 * @param algorithm
+	 * Converts part of the list to heap.
+	 * @param list to be converted to heap;
+	 * @param elementsCount number of first elements that heap is to be built upon;
+	 * @param comparator used for list elements comparison.
 	 */
 	public void buildHeap(AbstractList<T> list, int elementsCount, Comparator<T> comparator) {
 		final int lastParentNodeIdx = elementsCount / 2 - 1;//the last child belongs to the last parent
@@ -74,6 +78,9 @@ public class MinListHeap<T> {
 		}
 	}
 
+	/**
+	 * Method that checks if the list elements belong to minimum heap.
+	 */
 	private void assertHeapProperty(AbstractList<T> list, int elementsCount, Comparator<T> copmarator) {
 		final int lastParentNodeIdx = elementsCount / 2 - 1;//the last child belongs to the last parent
 		int currentIndex = lastParentNodeIdx;
@@ -98,21 +105,19 @@ public class MinListHeap<T> {
 
 	/**
 	 * Returns the height of the heap tree representation, given elements count.
-	 * @param elementsCount
-	 * @return
 	 */
 	public static int height(int elementsCount) {
 		return (int)Math.ceil(Math.log10(elementsCount + 1)/Math.log10(2));
 	}
 	/**
-	 * Returns index of the left child of node in question
+	 * Returns index of the left child of node in question.
 	 */
 	public static int leftChildIdx(int nodeIdx) {
 		return (2 * nodeIdx + 1);
 	}
 
 	/**
-	 * Returns index of the right child of node in question
+	 * Returns index of the right child of node in question.
 	 */
 	public static int rightChildIdx(int nodeIdx) {
 		return (2 * nodeIdx + 2);
