@@ -649,12 +649,10 @@ public class ExternalSort extends UnaryOperator {
 				//take minimum element and output to run file
 				lastOutTuple = buffArray.get(0);
 				runRIOMgr.insertTuple(lastOutTuple);
-				
-				if (opTupIter.hasNext()) 
-					newInTuple = opTupIter.next();
-
+				 
 				//if there is another input tuple, read it
-				if (null != newInTuple) {//NOTE: can we do this with hasNext() instead of checking for null?!
+				if (opTupIter.hasNext()) {
+					newInTuple = opTupIter.next();
 					int cmpRet = comparator.compare(lastOutTuple, newInTuple);
 					if (cmpRet > 0) {//new tuple is smaller, put to the next run
 						nextRunStartIdx--;
