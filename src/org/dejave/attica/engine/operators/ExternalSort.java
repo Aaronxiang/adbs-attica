@@ -290,7 +290,7 @@ public class ExternalSort extends UnaryOperator {
 				OperatorTuplesIterator opTupIter = new OperatorTuplesIterator(inOperator);
 
 				if (opTupIter.hasNext()) {
-					LinkedList<String> runFiles = createRunFiles(inRelation, opTupIter);
+					ArrayList<String> runFiles = createRunFiles(inRelation, opTupIter);
 					outputMan = mergeRunFiles(inRelation, runFiles);
 
 					outputTuples = outputMan.tuples().iterator();
@@ -316,7 +316,7 @@ public class ExternalSort extends UnaryOperator {
 	 * @throws EngineException
 	 * @throws StorageManagerException
 	 */
-	private LinkedList<String> createRunFiles(Relation inRelation, OperatorTuplesIterator opTupIter) 
+	private ArrayList<String> createRunFiles(Relation inRelation, OperatorTuplesIterator opTupIter) 
 			throws EngineException, StorageManagerException {
 		//create an in-memory array to sort runs
 		//size = (buffers - 2), since we use 1 page for input and 1 for output
@@ -336,7 +336,7 @@ public class ExternalSort extends UnaryOperator {
 		MinListHeap<Tuple> heapifier = new MinListHeap<Tuple>();
 		heapifier.buildHeap(buffArray, heapElementsNo, comparator);
 
-		LinkedList<String> runFiles = new LinkedList<String>();
+		ArrayList<String> runFiles = new ArrayList<String>();
 
 		//generate run files
 		while (true) {
@@ -413,12 +413,12 @@ public class ExternalSort extends UnaryOperator {
 	 * @throws IOException
 	 * @throws StorageManagerException
 	 */
-	private RelationIOManager mergeRunFiles(Relation inRelation, LinkedList<String> runFiles)
+	private RelationIOManager mergeRunFiles(Relation inRelation, ArrayList<String> runFiles)
 			throws EngineException {
 		RelationIOManager runFileRelManager = null;
 		RelationIOManager outputRelManager = null;
 		//files to be merged in a current iteration
-		LinkedList<String> currentRunFiles = runFiles;
+		ArrayList<String> currentRunFiles = new ArrayList<String>();
 		//files scheduled to merge in next iteration - they are a result of merging current run files
 		ArrayList<String> newRunFiles = new ArrayList<String>();	
 		final int buffersNoForMerge = buffers - 1;//there is one output page and others may be used for input runs
@@ -426,11 +426,16 @@ public class ExternalSort extends UnaryOperator {
 		MFDComparator mfdComparator = new MFDComparator(new TupleComparator(slots));
 		MinListHeap<MergeFilesData> mfdHeapifier = new MinListHeap<ExternalSort.MergeFilesData>();
 
+		newRunFiles = runFiles;
+		
 		try {
 
 			//if we are not done yet with merging, keep going
-			while (currentRunFiles.size() > 0) {
-				if (currentRunFiles.size() < buffersNoForMerge) {//this is a final merge
+			while (newRunFiles.size() > 0) {
+				currentRunFiles.addAll(newRunFiles);
+				newRunFiles.clear();
+				
+				if (currentRunFiles.size() <= buffersNoForMerge) {//this is a final merge
 					outputRelManager = 
 							new RelationIOManager(sm, inRelation, outputFile);
 					runFileRelManager = outputRelManager;
@@ -447,7 +452,7 @@ public class ExternalSort extends UnaryOperator {
 
 					int mergedRunsNo = Math.min(currentRunFiles.size(), buffersNoForMerge);
 					for (int i = 0; i < mergedRunsNo; ++i) {
-						mergedRuns.add(new MergeFilesData(currentRunFiles.pop(), inRelation, sm));
+						mergedRuns.add(new MergeFilesData(currentRunFiles.remove(currentRunFiles.size() - 1), inRelation, sm));
 					}
 
 					mfdHeapifier.buildHeap(mergedRuns, mfdComparator);
@@ -465,9 +470,6 @@ public class ExternalSort extends UnaryOperator {
 					}
 					runFileRelManager = null;
 				}
-
-				currentRunFiles.addAll(newRunFiles);
-				newRunFiles.clear();
 			}
 		} catch (Exception e) {
 			//clean all the temporal files that got created here
