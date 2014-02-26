@@ -319,7 +319,7 @@ public class ExternalSort extends UnaryOperator {
 	private LinkedList<String> createRunFiles(Relation inRelation, OperatorTuplesIterator opTupIter) 
 			throws EngineException, StorageManagerException {
 		//create an in-memory array to sort runs
-		//buffers - 2 is used, since we use 1 page for input and 1 for output
+		//size = (buffers - 2), since we use 1 page for input and 1 for output
 		String arrayBufferFile = FileUtil.createTempFileName();
 		ArrayCreationResult res = createPagedArray(TupleIOManager.byteSize(inRelation, opTupIter.peek()), 
 				Sizes.PAGE_SIZE, buffers - 2, inRelation, sm, arrayBufferFile, opTupIter);
@@ -412,6 +412,7 @@ public class ExternalSort extends UnaryOperator {
 	private RelationIOManager mergeRunFiles(Relation inRelation, LinkedList<String> runFiles)
 			throws EngineException {
 		RelationIOManager runFileRelManager = null;
+		RelationIOManager outputRelManager = null;
 		//files to be merged in a current iteration
 		LinkedList<String> currentRunFiles = runFiles;
 		//files scheduled to merge in next iteration - they are a result of merging current run files
@@ -426,18 +427,18 @@ public class ExternalSort extends UnaryOperator {
 			//if we are not done yet with merging, keep going
 			while (currentRunFiles.size() > 0) {
 				if (currentRunFiles.size() < buffersNoForMerge) {//this is a final merge
-					runFileRelManager = 
+					outputRelManager = 
 							new RelationIOManager(sm, inRelation, outputFile);
+					runFileRelManager = outputRelManager;
 				}
 
 				while (0 != currentRunFiles.size()) {
-					//! TODO: get rid of that loop!!!
 					if (null == runFileRelManager) {//this is not the final merge, so add temporary file
 						String runFileName = FileUtil.createTempFileName();
+						sm.createFile(runFileName);
 						newRunFiles.add(runFileName);
 						runFileRelManager = 
 								new RelationIOManager(sm, inRelation, runFileName);
-						newRunFiles.add(runFileName);
 					}
 
 					int mergedRunsNo = Math.min(currentRunFiles.size(), buffersNoForMerge);
@@ -453,12 +454,12 @@ public class ExternalSort extends UnaryOperator {
 						if (null == d.nextValue()) {//if this was the last tuple from this run, remove temporal file and its reference
 							d.removeFile(sm);
 							d = mergedRuns.remove(--mergedRunsNo);
-							//! TODO: the new run from currentRunFiles could be inserted here
 							if (! mergedRuns.isEmpty())
 								mergedRuns.set(0, d);
 						}
 						mfdHeapifier.heapify(mergedRuns, 0, mfdComparator);
 					}
+					runFileRelManager = null;
 				}
 
 				currentRunFiles.addAll(newRunFiles);
@@ -476,7 +477,7 @@ public class ExternalSort extends UnaryOperator {
 			throw new EngineException("Couldn't merge files.", e);
 		}
 
-		return runFileRelManager;
+		return outputRelManager;
 	}
 
 	/**
