@@ -268,7 +268,6 @@ public class ExternalSort extends UnaryOperator {
 			// //////////////////////////////////////////
 
 			if (false) {
-
 				Relation rel = getInputOperator().getOutputRelation();
 				RelationIOManager rMan =
 						new RelationIOManager(sm, rel, outputFile);
@@ -284,7 +283,6 @@ public class ExternalSort extends UnaryOperator {
 				outputTuples = rMan.tuples().iterator();
 			}
 			else {
-
 				Operator inOperator = getInputOperator();
 				Relation inRelation = inOperator.getOutputRelation();
 				OperatorTuplesIterator opTupIter = new OperatorTuplesIterator(inOperator);
@@ -435,36 +433,34 @@ public class ExternalSort extends UnaryOperator {
 				currentRunFiles.addAll(newRunFiles);
 				newRunFiles.clear();
 				
-				if (currentRunFiles.size() <= buffersNoForMerge) {//this is a final merge
+				if (currentRunFiles.size() <= buffersNoForMerge) {//if this is a final merge
 					outputRelManager = 
 							new RelationIOManager(sm, inRelation, outputFile);
 					runFileRelManager = outputRelManager;
 				}
 
-				while (0 != currentRunFiles.size()) {
+				while (0 != currentRunFiles.size()) {//merge B-1 files simultaneously
 					if (null == runFileRelManager) {//this is not the final merge, so add temporary file
-						String runFileName = FileUtil.createTempFileName();
-						sm.createFile(runFileName);
-						newRunFiles.add(runFileName);
-						runFileRelManager = 
-								new RelationIOManager(sm, inRelation, runFileName);
+						runFileRelManager = createRelationIOManager(inRelation);
+						newRunFiles.add(runFileRelManager.getFileName());
 					}
 
-					int mergedRunsNo = Math.min(currentRunFiles.size(), buffersNoForMerge);
-					for (int i = 0; i < mergedRunsNo; ++i) {
+					final int MergedRunsNo = Math.min(currentRunFiles.size(), buffersNoForMerge);
+					for (int i = 0; i < MergedRunsNo; ++i) {
 						mergedRuns.add(new MergeFilesData(currentRunFiles.remove(currentRunFiles.size() - 1), inRelation, sm));
 					}
 
 					mfdHeapifier.buildHeap(mergedRuns, mfdComparator);
 					while (! mergedRuns.isEmpty()) {
-						//take heap root (minimum element) and output it
+						//take heap root (minimum element) and output it // 100 - 188kB
 						MergeFilesData d = mergedRuns.get(0);
 						runFileRelManager.insertTuple(d.value());
 						if (null == d.nextValue()) {//if this was the last tuple from this run, remove temporal file and its reference
 							d.removeFile(sm);
-							d = mergedRuns.remove(--mergedRunsNo);
-							if (! mergedRuns.isEmpty())
+							d = mergedRuns.remove(mergedRuns.size() - 1);
+							if (0 < mergedRuns.size()) {
 								mergedRuns.set(0, d);
+							}
 						}
 						mfdHeapifier.heapify(mergedRuns, 0, mfdComparator);
 					}
@@ -690,8 +686,7 @@ public class ExternalSort extends UnaryOperator {
 			// it handles the case, when there was less tuples read than memory
 			// available - the array will just use less pages than provided
 			Iterator<Page> pagesIt = arrayManager.pages().iterator();
-			int realPagesNo = (int) Math
-					.ceil(1.0 * arraySize / tuplesNoPerPage);
+			int realPagesNo = (int) Math.ceil(1.0 * arraySize / tuplesNoPerPage);
 			pages = new Page[realPagesNo];
 			for (int i = 0; i < realPagesNo; ++i) {
 				pages[i] = pagesIt.next();
