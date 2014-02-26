@@ -33,6 +33,11 @@ import org.dejave.util.MinListHeap;
  * ExternalSort: Your implementation of sorting.
  * 
  * @author sviglas
+ * 
+ * Krzysztow: Code implements the heap-sort replacement selection algorithm with use of own Heap builder class.
+ * It is divided into two steps:
+ * - mergeRunFiles() - create run files out of the input - this is done with use of page-oriented array structure and heap builder class;
+ * - createRunFiles() - merge the files using B-1 merge algorithm (as mentioned below, also modified version is presented but  
  */
 public class ExternalSort extends UnaryOperator {
 
@@ -115,36 +120,19 @@ public class ExternalSort extends UnaryOperator {
 	public void setup() throws EngineException {
 		returnList = new ArrayList<Tuple>();
 		try {
-			if (false) {
-				Relation rel = getInputOperator().getOutputRelation();
-				RelationIOManager rMan =
-						new RelationIOManager(sm, rel, outputFile);
-				boolean done = false;
-				while (! done) {
-					Tuple tuple = getInputOperator().getNext();
-					if (tuple != null) {
-						done = (tuple instanceof EndOfStreamTuple);
-						if (! done) rMan.insertTuple(tuple);
-					}
-				}
 
-				outputTuples = rMan.tuples().iterator();
+			Operator inOperator = getInputOperator();
+			Relation inRelation = inOperator.getOutputRelation();
+			OperatorTuplesIterator opTupIter = new OperatorTuplesIterator(inOperator);
+
+			if (opTupIter.hasNext()) {
+				ArrayList<String> runFiles = createRunFiles(inRelation, opTupIter);
+				outputMan = mergeRunFiles(inRelation, runFiles);
+
+				outputTuples = outputMan.tuples().iterator();
 			}
 			else {
-				Operator inOperator = getInputOperator();
-				Relation inRelation = inOperator.getOutputRelation();
-				OperatorTuplesIterator opTupIter = new OperatorTuplesIterator(inOperator);
-
-				if (opTupIter.hasNext()) {
-					ArrayList<String> runFiles = createRunFiles(inRelation, opTupIter);
-					outputMan = mergeRunFiles(inRelation, runFiles);
-
-					outputTuples = outputMan.tuples().iterator();
-				}
-				else {
-					//how can that happen?
-				}
-
+				//how can that happen?
 			}
 
 		} catch (Exception sme) {
@@ -155,7 +143,7 @@ public class ExternalSort extends UnaryOperator {
 
 
 	/**
-	 * Creates a bunch of temporary, sorted files. 
+	 * Creates a bunch of temporary, sorted files out of the one source tuple iterator. 
 	 * @param inRelation relation to which schema incomming tuples conform to;
 	 * @param opTupIter iterator over input operator's tuples stream;
 	 * @return list of the temporary run files.
@@ -174,7 +162,7 @@ public class ExternalSort extends UnaryOperator {
 		//number of elements that count into current run (they are heapified)
 		//these elements take positions [0..heapElementsNo-1] in the array
 		int heapElementsNo = res.elemsNoRead;
-		//start of the next run partial array
+		//index of start of the next run array
 		//these elements take positions [nextRunStartIdx..buffArray.size()-1]
 		int nextRunStartIdx = buffArray.size();
 
@@ -184,7 +172,7 @@ public class ExternalSort extends UnaryOperator {
 
 		ArrayList<String> runFiles = new ArrayList<String>();
 
-		//generate run files
+		//generate run files until we are run out of input
 		while (true) {
 			//new run file
 			String runFile = FileUtil.createTempFileName();
@@ -192,8 +180,10 @@ public class ExternalSort extends UnaryOperator {
 			sm.createFile(runFile);
 			RelationIOManager runRIOMgr = new RelationIOManager(sm, inRelation, runFile);
 
-			Tuple lastOutTuple = null;//last tuple that was output to the output page
-			Tuple newInTuple = null;//tuple taken from the input page
+			//last tuple that was output to the output page
+			Tuple lastOutTuple = null;
+			//tuple taken from the input page
+			Tuple newInTuple = null;
 			while (0 != heapElementsNo) {//while current run is ongoing
 				//take minimum element and output to run file
 				lastOutTuple = buffArray.get(0);
@@ -251,7 +241,7 @@ public class ExternalSort extends UnaryOperator {
 	 * Writes sorted sequence of tuples to the output file, given a list of run files of sorted tuples.
 	 * 
 	 * NOTE: There is another implementation below, mergeRunFiles2(), which tries to keep opened B-1 files all the time
-	 * and make use of it. However it doesn't improve much in general case (apart from cases when files are partially sorted).
+	 * and make use of it, see description to it. However it doesn't improve much in general case (apart from cases when files are partially sorted).
 	 * 
 	 * @param inRelation relation to which schema all the files conform to;
 	 * @param runFiles list of files to be merged.
@@ -266,9 +256,11 @@ public class ExternalSort extends UnaryOperator {
 		//files to be merged in a current iteration
 		ArrayList<String> currentRunFiles = new ArrayList<String>();
 		//files scheduled to merge in next iteration - they are a result of merging current run files
-		ArrayList<String> newRunFiles = new ArrayList<String>();	
-		final int buffersNoForMerge = buffers - 1;//there is one output page and others may be used for input runs
-		ArrayList<MergeFilesData> mergedRuns = new ArrayList<ExternalSort.MergeFilesData>();//many random accesses -> array is the best
+		ArrayList<String> newRunFiles = new ArrayList<String>();
+		//there is one output page and other left may be used for input runs	
+		final int buffersNoForMerge = buffers - 1;
+		//currently merged files (B-1) - keeps track of tuples iterators and references to appropriate files
+		ArrayList<MergeFilesData> mergedRuns = new ArrayList<ExternalSort.MergeFilesData>();
 		MFDComparator mfdComparator = new MFDComparator(new TupleComparator(slots));
 		MinListHeap<MergeFilesData> mfdHeapifier = new MinListHeap<ExternalSort.MergeFilesData>();
 
@@ -293,6 +285,7 @@ public class ExternalSort extends UnaryOperator {
 						newRunFiles.add(runFileRelManager.getFileName());
 					}
 
+					//merge either B-1 files or less if there is less files left
 					final int MergedRunsNo = Math.min(currentRunFiles.size(), buffersNoForMerge);
 					for (int i = 0; i < MergedRunsNo; ++i) {
 						mergedRuns.add(new MergeFilesData(currentRunFiles.remove(currentRunFiles.size() - 1), inRelation, sm));
@@ -300,7 +293,7 @@ public class ExternalSort extends UnaryOperator {
 
 					mfdHeapifier.buildHeap(mergedRuns, mfdComparator);
 					while (! mergedRuns.isEmpty()) {
-						//take heap root (minimum element) and output it // 100 - 188kB
+						//take heap root (minimum element) and output it
 						MergeFilesData d = mergedRuns.get(0);
 						runFileRelManager.insertTuple(d.value());
 						if (null == d.nextValue()) {//if this was the last tuple from this run, remove temporal file and its reference
@@ -744,9 +737,13 @@ public class ExternalSort extends UnaryOperator {
 	
 	/**
 	 * Writes sorted sequence of tuples to the output file, given a list of run files of sorted tuples.
-	 * This implementation tries to add another previous run file to the ongoing one if one of being merged
-	 * is read in entirety. However it doesn't give any performance gain on evenly distributed values - it could
-	 * only take advantage on partially sorted data.
+	 * This implementation tries to keep B-1 files opened all the time. If one opened file has ended, we open 
+	 * a new one and check if it's smallest (first, since it's sorted) element is larger than the last output. If so, we can freely
+	 * keep on adding tuples from this file. Otherwise they are left opened, and will be added for another run. 
+	 * 
+	 * Note: This implementation doesn't better than previous, generally, since newly added run file would have to have all elements larger
+	 * than the one being replaced. With even tuples distribution, it will not be a case. 
+	 *
 	 * @param inRelation relation to which schema all the files conform to;
 	 * @param runFiles list of files to be merged.
 	 * @return RelationIOManager reference to the output file.
@@ -849,6 +846,9 @@ public class ExternalSort extends UnaryOperator {
 		return outputRelManager;
 	}
 	
+	/**
+	* Creates a RelationIOManager to a temporal file.
+	*/
 	private RelationIOManager createRelationIOManager(Relation inRelation)
 			throws StorageManagerException {
 		RelationIOManager runFileRelManager;
