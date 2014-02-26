@@ -360,11 +360,12 @@ public class ExternalSort extends UnaryOperator {
 					if (cmpRet > 0) {//new tuple is smaller, put to the next run
 						nextRunStartIdx--;
 						heapElementsNo--;
-						//evicted tuple will never be null - since we keep the array full
+						//evicted tuple will never be null, since we keep the array full, so following is safe
 						Tuple evictedTuple = buffArray.set(nextRunStartIdx, newInTuple);
-						buffArray.set(0, evictedTuple);
+						if (0 != nextRunStartIdx)
+							buffArray.set(0, evictedTuple);
 					}
-					else {//tuple bigger, could be used in a current run
+					else {//tuple is larger, will be used in a current run
 						buffArray.set(0, newInTuple);
 					}							
 				}
