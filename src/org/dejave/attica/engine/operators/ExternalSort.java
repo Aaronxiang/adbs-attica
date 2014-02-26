@@ -291,9 +291,9 @@ public class ExternalSort extends UnaryOperator {
 
 				if (opTupIter.hasNext()) {
 					LinkedList<String> runFiles = createRunFiles(inRelation, opTupIter);
-					RelationIOManager outFileRelManager = mergeRunFiles(inRelation, runFiles);
+					outputMan = mergeRunFiles(inRelation, runFiles);
 
-					outputTuples = outFileRelManager.tuples().iterator();
+					outputTuples = outputMan.tuples().iterator();
 				}
 				else {
 					//how can that happen?
@@ -403,6 +403,10 @@ public class ExternalSort extends UnaryOperator {
 
 	/**
 	 * Writes sorted sequence of tuples to the output file, given a list of run files of sorted tuples.
+	 * 
+	 * NOTE: There is another implementation below, mergeRunFiles2(), which tries to keep opened B-1 files all the time
+	 * and make use of it. However it doesn't improve much in general case (apart from cases when files are partially sorted).
+	 * 
 	 * @param inRelation relation to which schema all the files conform to;
 	 * @param runFiles list of files to be merged.
 	 * @return RelationIOManager reference to the output file.
@@ -889,6 +893,125 @@ public class ExternalSort extends UnaryOperator {
 		public int compare(MergeFilesData v1, MergeFilesData v2) {
 			return comparator.compare(v1.value(), v2.value());
 		}
+	}
+	
+	
+	
+	/**
+	 * Writes sorted sequence of tuples to the output file, given a list of run files of sorted tuples.
+	 * This implementation tries to add another previous run file to the ongoing one if one of being merged
+	 * is read in entirety. However it doesn't give any performance gain on evenly distributed values - it could
+	 * only take advantage on partially sorted data.
+	 * @param inRelation relation to which schema all the files conform to;
+	 * @param runFiles list of files to be merged.
+	 * @return RelationIOManager reference to the output file.
+	 * @throws IOException
+	 * @throws StorageManagerException
+	 */
+	private RelationIOManager mergeRunFiles2(Relation inRelation, ArrayList<String> runFiles)
+			throws EngineException {
+		RelationIOManager runFileRelManager = null;
+		RelationIOManager outputRelManager = null;
+		//files to be merged in a current iteration
+		ArrayList<String> currentRunFiles = new ArrayList<String>();
+		//files scheduled to be merged in next iteration - they are a result of merging current run files
+		ArrayList<String> newRunFiles = new ArrayList<String>();	
+		final int BuffersNoForMerge = buffers - 1;//there is one output page and others may be used for input runs
+		
+		//stores information of runs being merged
+		ArrayList<MergeFilesData> mergedRuns = new ArrayList<ExternalSort.MergeFilesData>();
+		//stores information of runs to be merged
+		ArrayList<MergeFilesData> currentMergeOpenedFiles = new ArrayList<ExternalSort.MergeFilesData>();
+		
+		TupleComparator tupleComparator = new TupleComparator(slots);
+		MFDComparator mfdComparator = new MFDComparator(tupleComparator);
+		MinListHeap<MergeFilesData> mfdHeapifier = new MinListHeap<ExternalSort.MergeFilesData>();
+
+		newRunFiles.addAll(runFiles);
+		
+		try {
+
+			//if we are not done yet with merging, keep going
+			while (! newRunFiles.isEmpty()) {
+				currentRunFiles.addAll(newRunFiles);
+				newRunFiles.clear();
+				
+				if (currentRunFiles.size() <= BuffersNoForMerge) {//this is a final merge
+					outputRelManager = 
+							new RelationIOManager(sm, inRelation, outputFile);
+					runFileRelManager = outputRelManager;
+				}
+				else {
+					runFileRelManager = createRelationIOManager(inRelation);
+				}
+
+				currentMergeOpenedFiles = new ArrayList<ExternalSort.MergeFilesData>();
+				final int MergedRunsNo = Math.min(currentRunFiles.size(), BuffersNoForMerge);
+				for (int i = 0; i < MergedRunsNo; ++i) {
+					currentMergeOpenedFiles.add(new MergeFilesData(currentRunFiles.remove(currentRunFiles.size() - 1), inRelation, sm));
+				}
+				
+				while (! currentMergeOpenedFiles.isEmpty()) {
+
+					mergedRuns.addAll(currentMergeOpenedFiles);
+					currentMergeOpenedFiles.clear();
+					
+					if (outputRelManager != runFileRelManager) {//this is not the final merge, so add temporary file
+						runFileRelManager = createRelationIOManager(inRelation);
+						newRunFiles.add(runFileRelManager.getFileName());
+					}
+
+					mfdHeapifier.buildHeap(mergedRuns, mfdComparator);
+					while (! mergedRuns.isEmpty()) {
+						//take heap root (minimum element) and output it
+						MergeFilesData d = mergedRuns.get(0);
+						Tuple lastOutTuple = d.value();
+						runFileRelManager.insertTuple(lastOutTuple);
+						if (null == d.nextValue()) {//if this was the last tuple from this run, remove temporal file and its reference
+							d.removeFile(sm);
+							d = mergedRuns.remove(mergedRuns.size() - 1);
+							if (! mergedRuns.isEmpty())
+								mergedRuns.set(0, d);
+							//optimization - let's open another RelationalIOManager, since we have another spare page
+							if (! currentRunFiles.isEmpty()) {
+								MergeFilesData mfd = new MergeFilesData(currentRunFiles.remove(currentRunFiles.size() - 1), inRelation, sm);
+								int cmpRet = tupleComparator.compare(lastOutTuple, mfd.value());
+								//last written tuple was smaller (or equal) than the first of the given newly open run - we can add that run to current merging
+								if (cmpRet <= 0) {
+									mergedRuns.add(mfd);
+								}
+								else {
+									currentMergeOpenedFiles.add(mfd);
+								}
+							}
+						}
+						mfdHeapifier.heapify(mergedRuns, 0, mfdComparator);
+					}
+				}
+			}
+		} catch (Exception e) {
+			//clean all the temporal files that got created here
+			for (String f : newRunFiles) 
+				try {sm.deleteFile(f);} catch (StorageManagerException ex) {}
+			for (String f : currentRunFiles)
+				try {sm.deleteFile(f);} catch (StorageManagerException ex) {}
+			for (MergeFilesData d : mergedRuns) 
+				try {d.removeFile(sm);} catch (StorageManagerException ex) {}
+			
+			throw new EngineException("Couldn't merge files.", e);
+		}
+
+		return outputRelManager;
+	}
+	
+	private RelationIOManager createRelationIOManager(Relation inRelation)
+			throws StorageManagerException {
+		RelationIOManager runFileRelManager;
+		String runFileName = FileUtil.createTempFileName();
+		sm.createFile(runFileName);
+		runFileRelManager = 
+				new RelationIOManager(sm, inRelation, runFileName);
+		return runFileRelManager;
 	}
 
 } // ExternalSort
