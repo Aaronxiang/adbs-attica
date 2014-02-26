@@ -13,7 +13,7 @@ public class MinListHeap<T> {
 	 * @param comparator comparator used for nodes comparison.
 	 */
 	public void heapify(AbstractList<T> list, int nodeIdx, Comparator<T> comparator) {
-		heapify(list, list.size(), nodeIdx, comparator);
+		heapify(list, nodeIdx, list.size(), comparator);
 	}
 
 	/**

@@ -692,7 +692,7 @@ public class ExternalSort extends UnaryOperator {
 			throw new EngineException("Couldn't initialize the array file", sme);
 		}
 
-		System.out.println("Tsize: " + tupleSize + ", pages " + maxPagesNo + ", realPages " + pages.length);
+		//System.out.println("Tsize: " + tupleSize + ", pages " + maxPagesNo + ", realPages " + pages.length);
 		
 		return new ArrayCreationResult(arraySize, new PagedArray(
 				tuplesNoPerPage, arraySize, pages));
@@ -861,6 +861,13 @@ public class ExternalSort extends UnaryOperator {
 			}
 			return currentValue;
 		}
+		
+		@Override
+		public String toString() {
+			if (null == currentValue)
+				return "NULL";
+			return currentValue.toString();
+		}
 	}
 
 	/**
@@ -878,7 +885,7 @@ public class ExternalSort extends UnaryOperator {
 
 		@Override
 		public int compare(MergeFilesData v1, MergeFilesData v2) {
-			return comparator.compare(v1.value(), v1.value());
+			return comparator.compare(v1.value(), v2.value());
 		}
 	}
 
