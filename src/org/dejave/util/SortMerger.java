@@ -66,9 +66,9 @@ public abstract class SortMerger<T> {
 			else {
 				mergeValues(firstValue, secondValue);
 
-				if (!firstGroupStarted) {
+				if (! firstGroupStarted) {
 					firstGroupStarted = true;
-					firstGroupStartIdx = firstIt.nextIndex() - 1;
+					firstGroupStartIdx = firstIt.previousIndex();
 					groupValue = firstValue;
 				}
 
@@ -141,14 +141,7 @@ public abstract class SortMerger<T> {
 
 		@Override
 		public ListIterator<DebugTuple> createFirstIteratorAt(int positionIdx) {
-			ListIterator<DebugTuple> it = null;
-			if (0 == positionIdx) {
-				it = first.listIterator();
-			}
-			else {
-				it = first.listIterator(positionIdx);
-			}
-			return it;
+			return first.listIterator(positionIdx);
 		}
 		
 	}
@@ -169,6 +162,12 @@ public abstract class SortMerger<T> {
 		checkMergeOfArrays(c, d, 3);
 		checkMergeOfArrays(d, c, 3);
 		
+		//same as above, but longer B group end of group == end of one input
+		String c1[] = {"A", "B", "B", "B"};
+		String d1[] = {"A", "B"};
+		checkMergeOfArrays(c1, d1, 4);
+		checkMergeOfArrays(d1, c1, 4);
+		
 		//beginning/end of group == beginning/end of input; one input takes all the array
 		String e[] = {"J", "J", "K"};
 		String f[] = {"J", "J", "J"};
@@ -180,6 +179,8 @@ public abstract class SortMerger<T> {
 		String h[] = {"A", "B"};
 		checkMergeOfArrays(g, h, 3);
 		checkMergeOfArrays(h, g, 3);
+		
+		assert(false);
 	}//main()
 
 	private static void checkMergeOfArrays(String a[], String b[], int joinsNo) {
