@@ -180,7 +180,16 @@ public abstract class SortMerger<T> {
 		checkMergeOfArrays(g, h, 3);
 		checkMergeOfArrays(h, g, 3);
 		
-		assert(false);
+		//I should learn how to run Java
+		boolean handlesExceptions = false;
+		try { assert(false); }
+		catch (AssertionError err) {
+			handlesExceptions = true;
+		}
+		if (! handlesExceptions) {
+			System.err.println("ERROR: add -ea VM flags, to test for errors");
+		}
+		
 	}//main()
 
 	private static void checkMergeOfArrays(String a[], String b[], int joinsNo) {
