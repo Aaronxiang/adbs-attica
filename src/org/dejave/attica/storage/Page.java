@@ -10,12 +10,15 @@
  */
 package org.dejave.attica.storage;
 
+import java.nio.channels.UnsupportedAddressTypeException;
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.ArrayList;
+import java.util.ListIterator;
+import java.util.NoSuchElementException;
 
-import org.dejave.util.Convert;
 import org.dejave.attica.model.Relation;
+import org.dejave.util.Convert;
 
 /**
  * Page: The basic representation of an attica page. NB: this is the
@@ -194,24 +197,41 @@ public class Page implements Iterable<Tuple> {
      * @return an iterator over the tuples of this page.
      */
     public Iterator<Tuple> iterator() {
-        return new PageIterator();
+        return new PageIterator(0);
     }
-
+    
+    public ListIterator<Tuple> listIterator() {
+    	return new PageIterator(0);
+    }
+    
+    public ListIterator<Tuple> listIterator(int nextIdx) {
+    	return new PageIterator(nextIdx);
+    }
+    
+    /**
+     * Number of 
+     * @return
+     */
+    public int size() {
+    	return tuples.size();
+    }
+    
     /**
      * The iterator over the tuples of this page. Doesn't wrap the
      * list iterator because we want to keep track of free space on
      * removal (and, yes, this is brain-damaged since the system
      * doesn't support deletions yet).
      */
-    private class PageIterator implements Iterator<Tuple> {
+    private class PageIterator implements ListIterator<Tuple> {
         /** The current index of the iterator. */
         private int currentIndex;
 
         /**
          * Constructs a new iterator over this page's contents.
          */
-        public PageIterator() {
-            currentIndex = 0;
+        public PageIterator(int nextIdx) {
+            currentIndex = nextIdx;
+            assert(0 <= currentIndex && currentIndex <= size());
         }
 
         /**
@@ -230,7 +250,12 @@ public class Page implements Iterable<Tuple> {
          * @return the next tuple of the iterator.
          */
         public Tuple next() {
-            return tuples.get(currentIndex++);
+        	try {
+        		return tuples.get(currentIndex++);
+        	} 
+        	catch (IndexOutOfBoundsException e) {
+        		throw new NoSuchElementException("Page has no next tuple.");
+        	}
         }
 
         /**
@@ -242,6 +267,42 @@ public class Page implements Iterable<Tuple> {
             freeSpace += size;
             tuples.remove(currentIndex);
         }
+
+		@Override
+		public void add(Tuple arg0) {
+			throw new UnsupportedAddressTypeException();
+		}
+
+		@Override
+		public boolean hasPrevious() {
+			return (0 < currentIndex && currentIndex <= size());
+		}
+
+		@Override
+		public int nextIndex() {
+			return (currentIndex);
+		}
+
+		@Override
+		public Tuple previous() {
+			try {
+				return tuples.get(--currentIndex);
+			}
+			catch (IndexOutOfBoundsException e) {
+				throw new NoSuchElementException("Page has no previous tuple.");
+			}
+		}
+
+		@Override
+		public int previousIndex() {
+			return (currentIndex - 1);
+		}
+
+		@Override
+		public void set(Tuple arg0) {
+			throw new UnsupportedOperationException();
+		}
+        
     } // PageIterator()
     
 
