@@ -209,14 +209,6 @@ public class Page implements Iterable<Tuple> {
     }
     
     /**
-     * Number of 
-     * @return
-     */
-    public int size() {
-    	return tuples.size();
-    }
-    
-    /**
      * The iterator over the tuples of this page. Doesn't wrap the
      * list iterator because we want to keep track of free space on
      * removal (and, yes, this is brain-damaged since the system
@@ -231,7 +223,7 @@ public class Page implements Iterable<Tuple> {
          */
         public PageIterator(int nextIdx) {
             currentIndex = nextIdx;
-            assert(0 <= currentIndex && currentIndex <= size());
+            assert(0 <= currentIndex && currentIndex <= getNumberOfTuples());
         }
 
         /**
@@ -275,7 +267,7 @@ public class Page implements Iterable<Tuple> {
 
 		@Override
 		public boolean hasPrevious() {
-			return (0 < currentIndex && currentIndex <= size());
+			return (0 < currentIndex && currentIndex <= getNumberOfTuples());
 		}
 
 		@Override

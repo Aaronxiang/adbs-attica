@@ -375,11 +375,25 @@ public class RelationIOManager {
             /** The single-page tuple iterator. */
             private ListIterator<Tuple> tuplesIt;
             
+            /**
+             * keeps track of the direction which page iterator moved to last time.
+             * This needs to be included, since Java iterators are not like C++ ones.
+             * The problem is as follows:
+             * 	- when next() is invoked and we are done with current page, we get next one with PageListIterator::next() to get another page and iterate with tuples over it;
+             *  - however if someone now starts iterating back, previous() will call PageListIterator::previous() which will not give the previous page, but the actual one!
+             *  -> Java iterators it.next() == it.previous();
+             * This phenomenon has to be taken care of when calling hasPrevious() next() and previous().
+             * Fortunately, it's not that complicated for hasNext() since we may be on the last page only if iterated forwards (or invoked listIterator() with last page tuples index -
+             * - but this still acts like iterated forwards).
+             */
+            boolean lastPageDirIsForward = true;
+            
             int currentIdx = 0;
                         
             public TupleListIterator() {
             	pagesIt = pageItWrapper.listIterator(0);
             	tuplesIt = pagesIt.next().listIterator();
+            	lastPageDirIsForward = true;
             }
             
             public TupleListIterator(int nextIdx, Relation tupleRelation) {            	
@@ -396,6 +410,7 @@ public class RelationIOManager {
             			p = pagesIt.next();
             			tuplesIt = p.listIterator(nextIdx % tuplesPerPage);
             			currentIdx = nextIdx;
+                		lastPageDirIsForward = true;
             		}
             		else {
             			throw new IndexOutOfBoundsException();
@@ -406,7 +421,7 @@ public class RelationIOManager {
                 pagesIt = pageItWrapper.listIterator(0);
                 Page p = pagesIt.next();
                 int tuplesNoInPreviousPages = p.getNumberOfTuples();
-                while (tuplesNoInPreviousPages < nextIdx && pagesIt.hasNext()) {
+                while (tuplesNoInPreviousPages <= nextIdx && pagesIt.hasNext()) {
                 	p = pagesIt.next();
                 	tuplesNoInPreviousPages += p.getNumberOfTuples();
                 }
@@ -415,7 +430,7 @@ public class RelationIOManager {
                 if (tuplesNoInPreviousPages >= nextIdx) {
                 	tuplesIt = p.listIterator(nextIdx - tuplesNoInPreviousPages + p.getNumberOfTuples());
                 	currentIdx = nextIdx;
-                	//
+                	lastPageDirIsForward = true;
                 }
                 else {
                 	throw new IndexOutOfBoundsException();
@@ -439,6 +454,9 @@ public class RelationIOManager {
             		tuple = tuplesIt.next();
             	}
             	catch (NoSuchElementException e) {
+
+            		lastPageDirIsForward = true;
+
             		tuplesIt = (ListIterator<Tuple>)pagesIt.next().iterator();
             		tuple = tuplesIt.next();
             	}
@@ -461,7 +479,7 @@ public class RelationIOManager {
 				//we don't look at pagesIt.hasPrevious(), since tuplesIt is an iterator 
 				//already in a previous page
 				return (tuplesIt.hasPrevious() ||
-						pagesIt.previousIndex() > 0);
+						(lastPageDirIsForward ? pagesIt.previousIndex() > 0 : pagesIt.hasPrevious()));
 			}
 			
 			@Override
@@ -476,7 +494,12 @@ public class RelationIOManager {
 					tuple = tuplesIt.previous();
 				}
 				catch (NoSuchElementException e) {
-					Page page = pagesIt.previous();
+					Page page = null;
+					if (lastPageDirIsForward) {
+						pagesIt.previous();
+						lastPageDirIsForward = false;
+					}
+					page = pagesIt.previous();
 					tuplesIt = page.listIterator(page.getNumberOfTuples());
 					tuple = tuplesIt.previous();
 				}
@@ -518,83 +541,128 @@ public class RelationIOManager {
             final int tupleSize = getTestTupleSize(relation, filename);
             final int tuplesNoPerPage = Sizes.PAGE_SIZE / tupleSize;
             
+            int tuplesToWrite = tuplesNoPerPage + 1;
             
-            int tuplesWritten = 0;
-            for (int i = 0; i < 30; i++) {
-                List<Comparable> v = new ArrayList<Comparable>();
-                v.add(new Integer(i));
-                v.add(new String("bla"));
-                Tuple tuple = new Tuple(new TupleIdentifier(filename, i), v);
-                System.out.println("inserting: " + tuple);
-                manager.insertTuple(tuple);
-                ++tuplesWritten;
-            }
+            //crossing the boundary of 2 pages Pages
+    		writeRelation(filename, manager, tuplesToWrite);
+            testIWholeRelationIteration(filename, manager, tuplesToWrite);
+            testPartialRelationIteration(manager, tuplesToWrite - 2, 2);
+            sm.deleteFile(filename);
             
-            System.out.println("Tuples successfully inserted.");
-            System.out.println("Opening tuple cursor...");
+            //test over only one page
+            sm.createFile(filename);
+            tuplesToWrite = tuplesNoPerPage;
+            writeRelation(filename, manager, tuplesToWrite);
+            testIWholeRelationIteration(filename, manager, tuplesToWrite);
+            testPartialRelationIteration(manager, 0, tuplesToWrite);
+            sm.deleteFile(filename);
+            
+            //4 pages, cross middle two
+            sm.createFile(filename);
+            tuplesToWrite = 4 * tuplesNoPerPage;
+            writeRelation(filename, manager, tuplesToWrite);
+            testIWholeRelationIteration(filename, manager, tuplesToWrite);
+            testPartialRelationIteration(manager, 0, tuplesToWrite);
+            sm.deleteFile(filename);
 
-            //forward iteration
-            int tuplesFwdRead = 0;
-            for (Tuple tuple : manager.tuples()) {
-                System.out.println("read: " + tuple);
-                ++tuplesFwdRead;
-            }
-            
-            if (tuplesFwdRead != tuplesWritten) {
-            	throw new UnexpectedException("Different number of tuples written and read");
-            }
-            else {
-            	System.out.println("Forward iteration (" + tuplesFwdRead + ") OK!");
-            }
-            
-            //backward iteration check
-            TupleIteratorWrapper tiw = (TupleIteratorWrapper)manager.tuples();
-            ListIterator<Tuple> bckTupleIt = tiw.listIterator(tuplesWritten);
-            int tuplesBckRead = 0;
-            Tuple tuple1 = null;
-            while (bckTupleIt.hasPrevious()) {
-            	tuple1 = bckTupleIt.previous();
-            	++tuplesBckRead;
-            }
-            if (tuplesBckRead != tuplesWritten) {
-            	throw new UnexpectedException("Different number of tuples written and read in  backward direction!");
-            }
-            else {
-            	System.out.println("Backward iteration (" + tuplesFwdRead + ") OK!");
-            }
-            
-            //iteration from a give point few tuples forth and back
-            int startIdx = tuplesWritten / 3;
-            int tuplesToRead = tuplesWritten / 3;
-            ListIterator<Tuple> tupleIt = tiw.listIterator(startIdx);
-            HashMap<Tuple, Integer> checkTuples = new HashMap<Tuple, Integer>();
-            for (int i = 0; i < tuplesToRead; ++i) {
-            	tuple1 = tupleIt.next();
-            	checkTuples.put(tuple1, 1);
-            }
-            
-            Integer rmdTupleId = null;
-            while (tupleIt.previousIndex() >= startIdx) {
-            	tuple1 = tupleIt.previous();
-            	if (! checkTuples.containsKey(tuple1)) {
-            		throw new UnexpectedException("Tuple not in a hash while traversing back!");
-            	}
-            	rmdTupleId = checkTuples.remove(tuple1);
-            }
-            //make sure all were deleted
-            if (0 != checkTuples.size()) {
-            	throw new UnexpectedException("Some tuples are not removed!");
-            }
-            else {
-            	System.out.print("Forward and backward iteration works!");
-            }
-            
         }
         catch (Exception e) {
             System.err.println("Exception: " + e.getMessage());
             e.printStackTrace(System.err);
         }	
     } // main()
+
+	private static void testPartialRelationIteration(RelationIOManager manager,
+			int startIdx, int tuplesToRead) throws IOException,
+			StorageManagerException, UnexpectedException {
+		//iteration from a give point few tuples forth and back
+		System.out.println("Forward and backward list iteration...");
+		TupleIteratorWrapper tiw = (TupleIteratorWrapper)manager.tuples();
+		ListIterator<Tuple> tupleIt = tiw.listIterator(startIdx);
+		HashMap<Tuple, Integer> checkTuples = new HashMap<Tuple, Integer>();
+		Tuple tuple1 = null;
+		for (int i = 0; i < tuplesToRead; ++i) {
+			tuple1 = tupleIt.next();
+			checkTuples.put(tuple1, 1);
+			System.out.print("+");
+		}
+		
+		System.out.println();
+		Integer rmdTupleId = null;
+		while (tupleIt.previousIndex() >= startIdx) {
+			tuple1 = tupleIt.previous();
+			if (! checkTuples.containsKey(tuple1)) {
+				throw new UnexpectedException("Tuple not in a hash while traversing back!");
+			}
+			rmdTupleId = checkTuples.remove(tuple1);
+			System.out.print("-");
+		}
+		//make sure all were deleted
+		if (0 != checkTuples.size()) {
+			throw new UnexpectedException("Some tuples are not removed!");
+		}
+		else {
+			System.out.print("Forward and backward iteration works!");
+		}
+	}
+
+	private static void testIWholeRelationIteration(String filename,
+			RelationIOManager manager, int tuplesTotalNo)
+			throws StorageManagerException, IOException, UnexpectedException {
+		System.out.println("Opening tuple cursor...");
+
+		//forward iteration
+		System.out.println("Forward iteration...");
+		int tuplesFwdRead = 0;
+		for (Tuple tuple : manager.tuples()) {
+		    System.out.print(".");
+		    ++tuplesFwdRead;
+		}
+		
+		if (tuplesFwdRead != tuplesTotalNo) {
+			throw new UnexpectedException("Different number of tuples written and read");
+		}
+		else {
+			System.out.println("Forward iteration (" + tuplesFwdRead + ") OK!");
+		}
+		
+		//backward iteration check
+		System.out.println("Backward iteration...");
+		TupleIteratorWrapper tiw = (TupleIteratorWrapper)manager.tuples();
+		ListIterator<Tuple> bckTupleIt = tiw.listIterator(tuplesTotalNo);
+		int tuplesBckRead = 0;
+		Tuple tuple1 = null;
+		while (bckTupleIt.hasPrevious()) {
+			tuple1 = bckTupleIt.previous();
+			++tuplesBckRead;
+			System.out.print("+");
+		}
+		if (tuplesBckRead != tuplesTotalNo) {
+			throw new UnexpectedException("Different number of tuples written and read in  backward direction!");
+		}
+		else {
+			System.out.println("Backward iteration (" + tuplesFwdRead + ") OK!");
+		}
+	}
+
+	private static int writeRelation(String filename,
+			RelationIOManager manager, int tuplesToWrite)
+			throws StorageManagerException {
+		int tuplesWritten = 0;
+		System.out.println("Inserting...");
+		for (int i = 0; i < tuplesToWrite; i++) {
+		    List<Comparable> v = new ArrayList<Comparable>();
+		    v.add(new Integer(i));
+		    v.add(new String("bla"));
+		    Tuple tuple = new Tuple(new TupleIdentifier(filename, i), v);
+		    System.out.print(".");
+		    manager.insertTuple(tuple);
+		    ++tuplesWritten;
+		}
+		
+		System.out.println("Tuples successfully inserted.");
+		return tuplesWritten;
+	}
 
 	private static int getTestTupleSize(Relation relation, String filename) {
 		List<Comparable> v = new ArrayList<Comparable>();
