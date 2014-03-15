@@ -397,7 +397,7 @@ public class RelationIOManager {
             }
             
             public TupleListIterator(int nextIdx, Relation tupleRelation) {            	
-            	//if the size of tuples was constant
+            	//NOTE: if the size of tuples was constant, we could use following code
             	/* pagesIt = pageItWrapper.listIterator(0);
             	if (pagesIt.hasNext()) {
             		Page p = pageItWrapper.listIterator(0).next();
@@ -417,6 +417,7 @@ public class RelationIOManager {
             		}
             	} */
 
+            	//NOTE: however it's not constant, so we use the following code (bad, since to reach some tuple we need to scan from 0 page)
             	//size of the tuple is not guaranteed to be constant, so we need to iterate over all pages
                 pagesIt = pageItWrapper.listIterator(0);
                 Page p = pagesIt.next();
