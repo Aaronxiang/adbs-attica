@@ -173,27 +173,55 @@ public abstract class SortMerger2<T> {
 	//
 	public static class DebugTupleSortMerger extends SortMerger2<DebugTuple> {
 		static class DebugTupleMergerBuffer extends MergerBuffer<DebugTuple> {
-			ArrayList<DebugTuple> buffer = new ArrayList<DebugTuple>();
+			DebugTuple buffer[] = null;
+			int size = 0;
+			
+			public DebugTupleMergerBuffer(int bufferSize) {
+				buffer = new DebugTuple[bufferSize];
+			}
 			
 			@Override
 			public void begin() {
-				buffer.clear();
+				size = 0;
 			}
 
 			@Override
 			public boolean hasRoomForValue(DebugTuple value) {
-				return true;
+				return (size < buffer.length);
 			}
 
 			@Override
 			public boolean storeValue(DebugTuple value) {
-				buffer.add(value);
-				return true;
+				final boolean hadRoom = hasRoomForValue(value);
+				if (hadRoom) {
+					buffer[size++] = value;
+				}
+				else {
+					System.err.println("Didn't have room!");
+				}
+				return hadRoom;
 			}
 
 			@Override
 			public Iterator<DebugTuple> iterator() {
-				return buffer.iterator();
+				return new Iterator<DebugTuple>() {
+					int nextPos = 0;
+
+					@Override
+					public boolean hasNext() {
+						return (nextPos < size);
+					}
+
+					@Override
+					public DebugTuple next() {
+						return buffer[nextPos++];
+					}
+
+					@Override
+					public void remove() {
+						throw new UnsupportedOperationException("I don't do that!");
+					}
+				};
 			}
 		}
 		
@@ -202,8 +230,8 @@ public abstract class SortMerger2<T> {
 		List<DebugTuple> first = null;
 		List<DebugTuple> second = null;
 
-		public DebugTupleSortMerger(List<DebugTuple> first, List<DebugTuple> second) {
-			super(null, new DebugTupleMergerBuffer());
+		public DebugTupleSortMerger(List<DebugTuple> first, List<DebugTuple> second, int internalBufferSize) {
+			super(null, new DebugTupleMergerBuffer(internalBufferSize));
 			comparator = new DebugTupleComparator();
 			
 			super.comparator = comparator;
@@ -282,7 +310,7 @@ public abstract class SortMerger2<T> {
 		System.out.println("Merging: " + first);
 		System.out.println("with   : " + second);
 
-		DebugTupleSortMerger merger = new DebugTupleSortMerger(first, second);
+		DebugTupleSortMerger merger = new DebugTupleSortMerger(first, second, 10);
 		merger.doMerge(first.listIterator(), second.listIterator());
 		List<String> result = merger.result();
 		System.out.println("DONE: " + result + ": " + joinsNo + " ?= " + result.size() + " with comparisons " + merger.cmpCnt());
