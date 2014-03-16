@@ -6,12 +6,13 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.ListIterator;
 
+import com.sun.org.apache.bcel.internal.generic.NEWARRAY;
+
 public abstract class SortMerger2<T> {
 	static abstract class MergerBuffer<T> {
 		public abstract void begin();
 		
-		public abstract boolean hasRoomForValue(T value);
-		public abstract boolean storeValue(T value);
+		public abstract void storeValue(T value);
 		
 		public abstract Iterator<T> iterator();
 	} 
@@ -185,21 +186,21 @@ public abstract class SortMerger2<T> {
 				size = 0;
 			}
 
-			@Override
-			public boolean hasRoomForValue(DebugTuple value) {
-				return (size < buffer.length);
+			private void increaseCapacityBy(int increaseSize) {
+				System.out.println("Increased size from " + buffer.length + " to " + (buffer.length + increaseSize));
+				DebugTuple newBuffer[] = new DebugTuple[buffer.length + increaseSize];
+				for (int i = 0; i < buffer.length; ++i) {
+					newBuffer[i] = buffer[i];
+				}
+				buffer = newBuffer;
 			}
-
+			
 			@Override
-			public boolean storeValue(DebugTuple value) {
-				final boolean hadRoom = hasRoomForValue(value);
-				if (hadRoom) {
-					buffer[size++] = value;
+			public void storeValue(DebugTuple value) {
+				if (size >= buffer.length) {
+					increaseCapacityBy(1);
 				}
-				else {
-					System.err.println("Didn't have room!");
-				}
-				return hadRoom;
+				buffer[size++] = value;
 			}
 
 			@Override
@@ -258,35 +259,37 @@ public abstract class SortMerger2<T> {
 	 * Debug main.
 	 */
 	public static void main (String [] args) {
+		int internalBuffersSize[] = {1, 100};
+		
 		//normal case
 		String a[] = {"A", "A", "B", "B", "J", "J", "K"};
 		String b[] = {"B", "C", "G", "H", "I", "I", "J", "J", "J", "M"};
-		checkMergeOfArrays(a, b, 8);
-		checkMergeOfArrays(b, a, 8);
+		checkMergeOfArrays(a, b, 8, internalBuffersSize);
+		checkMergeOfArrays(b, a, 8, internalBuffersSize);
 
 		//end of group == end of one input
 		String c[] = {"A", "B", "B"};
 		String d[] = {"A", "B"};
-		checkMergeOfArrays(c, d, 3);
-		checkMergeOfArrays(d, c, 3);
+		checkMergeOfArrays(c, d, 3, internalBuffersSize);
+		checkMergeOfArrays(d, c, 3, internalBuffersSize);
 
 		//same as above, but longer B group end of group == end of one input
 		String c1[] = {"A", "B", "B", "B"};
 		String d1[] = {"A", "B"};
-		checkMergeOfArrays(c1, d1, 4);
-		checkMergeOfArrays(d1, c1, 4);
+		checkMergeOfArrays(c1, d1, 4, internalBuffersSize);
+		checkMergeOfArrays(d1, c1, 4, internalBuffersSize);
 
 		//beginning/end of group == beginning/end of input; one input takes all the array
 		String e[] = {"J", "J", "K"};
 		String f[] = {"J", "J", "J"};
-		checkMergeOfArrays(e, f, 6);
-		checkMergeOfArrays(f, e, 6);
+		checkMergeOfArrays(e, f, 6, internalBuffersSize);
+		checkMergeOfArrays(f, e, 6, internalBuffersSize);
 
 		//beginning of group == beginning of input
 		String g[] = {"A", "A", "B"};
 		String h[] = {"A", "B"};
-		checkMergeOfArrays(g, h, 3);
-		checkMergeOfArrays(h, g, 3);
+		checkMergeOfArrays(g, h, 3, internalBuffersSize);
+		checkMergeOfArrays(h, g, 3, internalBuffersSize);
 
 		//I should learn how to run Java
 		boolean handlesExceptions = false;
@@ -303,19 +306,21 @@ public abstract class SortMerger2<T> {
 
 	}//main()
 
-	private static void checkMergeOfArrays(String a[], String b[], int joinsNo) {
+	private static void checkMergeOfArrays(String a[], String b[], int joinsNo, int internalBufferSizes[]) {
 		List<DebugTuple> first = createTupleList(a);
 		List<DebugTuple> second = createTupleList(b);	
 
 		System.out.println("Merging: " + first);
 		System.out.println("with   : " + second);
 
-		DebugTupleSortMerger merger = new DebugTupleSortMerger(first, second, 10);
-		merger.doMerge(first.listIterator(), second.listIterator());
-		List<String> result = merger.result();
-		System.out.println("DONE: " + result + ": " + joinsNo + " ?= " + result.size() + " with comparisons " + merger.cmpCnt());
-		assert(result.size() == joinsNo);
-		System.out.println("");
+		for (int i = 0; i < internalBufferSizes.length; ++i) {
+			DebugTupleSortMerger merger = new DebugTupleSortMerger(first, second, internalBufferSizes[i]);
+			merger.doMerge(first.listIterator(), second.listIterator());
+			List<String> result = merger.result();
+			System.out.println("DONE: " + result + ": buffs no:" + internalBufferSizes[i] + ", comp. no: " + merger.cmpCnt() + ", joins no:" + joinsNo + " ?= " + result.size());
+			assert(result.size() == joinsNo);
+			System.out.println("");
+		}
 	}
 
 	private static List<DebugTuple> createTupleList(String[] a) {
