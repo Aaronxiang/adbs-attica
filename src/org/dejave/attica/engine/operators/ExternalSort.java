@@ -15,7 +15,6 @@ import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Iterator;
-import java.util.LinkedList;
 import java.util.List;
 
 import org.dejave.attica.model.Relation;
@@ -28,6 +27,7 @@ import org.dejave.attica.storage.StorageManagerException;
 import org.dejave.attica.storage.Tuple;
 import org.dejave.attica.storage.TupleIOManager;
 import org.dejave.util.MinListHeap;
+import org.dejave.util.TupleComparator;
 
 /**
  * ExternalSort: Your implementation of sorting.
@@ -382,31 +382,6 @@ public class ExternalSort extends UnaryOperator {
 	protected Relation setOutputRelation() throws EngineException {
 		return new Relation(getInputOperator().getOutputRelation());
 	} // setOutputRela
-
-	/**
-	 * Helper class for comparing tuples given the slots (and slots) order to compare with.
-	 * @author krzys
-	 * 
-	 */
-	private static class TupleComparator implements Comparator<Tuple> {
-		private int[] slots;
-
-		public TupleComparator(int[] slots) {
-			this.slots = slots;
-		}
-
-		public int compare(Tuple first, Tuple second) {
-			int ret = 0;
-			for (int i = 0; i < slots.length; ++i) {
-				ret = first.getValue(slots[i]).compareTo(
-						second.getValue(slots[i]));
-				if (0 != ret)
-					break;
-			}
-
-			return ret;
-		}
-	}
 
 	/**
 	 * Iterator-like wrapper to go over the tuples pulled from Operator.
