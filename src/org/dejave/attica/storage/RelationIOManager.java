@@ -271,7 +271,7 @@ public class RelationIOManager {
             
         	public PageListIterator(int nextIdx) {
                 pageOffset = nextIdx;
-                assert(0 <= pageOffset && pageOffset < numPages);
+                assert(0 <= pageOffset && pageOffset <= numPages);
         	}
         	
             public boolean hasNext() {
