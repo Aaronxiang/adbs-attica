@@ -307,6 +307,8 @@ public class Database {
                 if (! done) {
                     Sink sink = db.runStatement(input);
 
+                    System.out.println();
+                    
                     for (Tuple tuple : sink.tuples())
                         System.out.println(tuple.toStringFormatted());
 
