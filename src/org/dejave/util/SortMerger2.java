@@ -6,15 +6,13 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.ListIterator;
 
-import com.sun.org.apache.bcel.internal.generic.NEWARRAY;
-
 public abstract class SortMerger2<T> {
-	static abstract class MergerBuffer<T> {
-		public abstract void begin();
+	public interface MergerBuffer<T> {
+		public void reset();
 		
-		public abstract void storeValue(T value);
+		public void addValue(T value);
 		
-		public abstract Iterator<T> iterator();
+		public Iterator<T> iterator();
 	} 
 	
 	
@@ -60,8 +58,8 @@ public abstract class SortMerger2<T> {
 				//values are same - merge them - begin merge
 				mergeValues(firstValue, secondValue);
 				
-				buffer.begin();
-				buffer.storeValue(firstValue);
+				buffer.reset();
+				buffer.addValue(firstValue);
 				
 				//remember equal-values group parameters
 				firstGroupStartIdx = firstIt.previousIndex();
@@ -75,7 +73,7 @@ public abstract class SortMerger2<T> {
 					if (0 == cmpRes) {
 						//we are still in an equal-values group -> second tuple is also equal to current first input, thus merge
 						mergeValues(firstValue, secondValue);
-						buffer.storeValue(firstValue);
+						buffer.addValue(firstValue);
 					}
 					else 
 						break;
@@ -173,7 +171,7 @@ public abstract class SortMerger2<T> {
 
 	//
 	public static class DebugTupleSortMerger extends SortMerger2<DebugTuple> {
-		static class DebugTupleMergerBuffer extends MergerBuffer<DebugTuple> {
+		static class DebugTupleMergerBuffer implements MergerBuffer<DebugTuple> {
 			DebugTuple buffer[] = null;
 			int size = 0;
 			
@@ -182,7 +180,7 @@ public abstract class SortMerger2<T> {
 			}
 			
 			@Override
-			public void begin() {
+			public void reset() {
 				size = 0;
 			}
 
@@ -196,7 +194,7 @@ public abstract class SortMerger2<T> {
 			}
 			
 			@Override
-			public void storeValue(DebugTuple value) {
+			public void addValue(DebugTuple value) {
 				if (size >= buffer.length) {
 					increaseCapacityBy(1);
 				}
@@ -291,7 +289,7 @@ public abstract class SortMerger2<T> {
 		checkMergeOfArrays(g, h, 3, internalBuffersSize);
 		checkMergeOfArrays(h, g, 3, internalBuffersSize);
 
-		//I should learn how to run Java
+		//I should learn how to run Java tests
 		boolean handlesExceptions = false;
 		try { assert(false); }
 		catch (AssertionError err) {
