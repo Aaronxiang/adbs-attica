@@ -12,15 +12,11 @@ package org.dejave.attica.storage;
 
 import java.io.IOException;
 
-import java.rmi.UnexpectedException;
-import java.util.HashMap;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Iterator;
-import java.util.ListIterator;
 import java.util.NoSuchElementException;
 
-import org.dejave.attica.engine.predicates.TupleSlotPointer;
 import org.dejave.attica.model.Attribute;
 import org.dejave.attica.model.Relation;
 
@@ -244,281 +240,109 @@ public class RelationIOManager {
         /** The number of pages in the relation. */
         private int numPages;
 
+        /** The current page offset. */
+        private int pageOffset;
+
         /**
          * Constructs a new page iterator.
          */
         public PageIteratorWrapper()
             throws IOException, StorageManagerException {
 
+            pageOffset = 0;
             numPages = FileUtil.getNumberOfPages(getFileName());
         } // PageIteratorWrapper()
 
         /**
          * Returns an iterator over pages.
+         *
          * @return the iterator over pages.
          */
-        public ListIterator<Page> iterator() {
-            return new PageListIterator(0); // new Iterator
+        public Iterator<Page> iterator() {
+            return new Iterator<Page>() {
+                public boolean hasNext() {
+                    return pageOffset < numPages;
+                } // hasNext()
+                public Page next() throws NoSuchElementException {
+                    try {
+                        currentPage =
+                            sm.readPage(relation,
+                                        new PageIdentifier(getFileName(),
+                                                           pageOffset++));
+                        return currentPage;
+                    }
+                    catch (StorageManagerException sme) {
+                        throw new NoSuchElementException("Could not read "
+                                                         + "page to advance "
+                                                         + "the iterator.");
+                                                         
+                    }
+                } // next()
+                public void remove() throws UnsupportedOperationException {
+                    throw new UnsupportedOperationException("Cannot remove "
+                                                            + "from page "
+                                                            + "iterator.");
+                } // remove()
+            }; // new Iterator
         } // iterator()
-        
-        public ListIterator<Page> listIterator(int nextIdx) {
-            return new PageListIterator(nextIdx); // new Iterator
-        } // iterator()
-        
-        class PageListIterator implements ListIterator<Page> {
-            /** The current page offset. */
-            private int pageOffset;
-            
-        	public PageListIterator(int nextIdx) {
-                pageOffset = nextIdx;
-                assert(0 <= pageOffset && pageOffset <= numPages);
-        	}
-        	
-            public boolean hasNext() {
-                return pageOffset < numPages;
-            } // hasNext()
-            
-            public Page next() throws NoSuchElementException {
-                try {
-                    currentPage =
-                        sm.readPage(relation,
-                                    new PageIdentifier(getFileName(),
-                                                       pageOffset++));
-                    return currentPage;
-                }
-                catch (StorageManagerException sme) {
-                    throw new NoSuchElementException("Could not read "
-                                                     + "page to advance "
-                                                     + "the iterator.");
-                                                     
-                }
-            } // next()
-            public void remove() throws UnsupportedOperationException {
-                throw new UnsupportedOperationException("Cannot remove "
-                                                        + "from page "
-                                                        + "iterator.");
-            } // remove()
-            
-			@Override
-			public void add(Page arg0) {
-				throw new UnsupportedOperationException("Cannot add page with iterator.");
-				
-			}//add()
-			
-			@Override
-			public boolean hasPrevious() {
-				return pageOffset > 0;
-			}//hasPrevious()
-			
-			@Override
-			public int nextIndex() {
-				return pageOffset;
-			}//nextIndex()
-			
-			@Override
-			public Page previous() {
-                try {
-                    currentPage =
-                        sm.readPage(relation,
-                                    new PageIdentifier(getFileName(),
-                                                       --pageOffset));
-                    return currentPage;
-                }
-                catch (StorageManagerException sme) {
-                    throw new NoSuchElementException("Could not read "
-                                                     + "page to retreat "
-                                                     + "the iterator.");
-                                                     
-                }
-			}//previous()
-			
-			@Override
-			public int previousIndex() {
-				return pageOffset - 1;
-			}//previousIndex()
-			
-			@Override
-			public void set(Page arg0) {
-				throw new UnsupportedOperationException("Cannot set the page at iterator position.");
-			}//set()
-			
-        };
     } // PageIteratorWrapper
 
 
     /**
      * The basic iterator over tuples of this relation.
      */
-    class TupleIteratorWrapper implements Iterable<Tuple> {  
-    	PageIteratorWrapper pageItWrapper = null;
-    	
+    class TupleIteratorWrapper implements Iterable<Tuple> {
+        /** The page iterator. */
+        private Iterator<Page> pages;
+        
+        /** The single-page tuple iterator. */
+        private Iterator<Tuple> tuples;
+
+        /** Keeps track of whether there are more elements to return. */
+        private boolean more;
+
         /**
          * Constructs a new tuple iterator.
          */
         public TupleIteratorWrapper()
             throws IOException, StorageManagerException {
-        	pageItWrapper = (PageIteratorWrapper)pages();
+            
+            pages = pages().iterator();
+            more = pages.hasNext();
+            tuples = null;
         } // TupleIterator()
 
-        public ListIterator<Tuple> iterator() {
-            return new TupleListIterator();
+        /**
+         * Checks whether there are more tuples in this iterator.
+         *
+         * @return <code>true</code> if there are more tuples,
+         * <code>false</code> otherwise.
+         */
+        public Iterator<Tuple> iterator() {
+            return new Iterator<Tuple>() {
+                public boolean hasNext() {
+                    return more;
+                } // hasNext()
+                public Tuple next() throws NoSuchElementException {
+                    if (tuples == null && more)
+                        tuples = pages.next().iterator();
+
+                    Tuple tuple = tuples.next();
+                    if (tuples.hasNext()) more = true;
+                    else if (pages.hasNext()) {
+                        tuples = pages.next().iterator();
+                        more = true;
+                    }
+                    else more = false;
+                    return tuple;
+                } // next()
+                public void remove() throws UnsupportedOperationException {
+                    throw new UnsupportedOperationException("Cannot remove "
+                                                            + "from tuple "
+                                                            + "iterator.");
+                } // remove()
+            }; // new Iterator
         } // iterator()
-        
-        public ListIterator<Tuple> listIterator(int nextIdx) {
-        	return new TupleListIterator(nextIdx, relation);
-        }
-        
-        public class TupleListIterator implements ListIterator<Tuple> {
-            /** The page iterator. */
-            private ListIterator<Page> pagesIt;
-            
-            /** The single-page tuple iterator. */
-            private ListIterator<Tuple> tuplesIt;
-            
-            /**
-             * keeps track of the direction which page iterator moved to last time.
-             * This needs to be included, since Java iterators are not like C++ ones.
-             * The problem is as follows:
-             * 	- when next() is invoked and we are done with current page, we get next one with PageListIterator::next() to get another page and iterate with tuples over it;
-             *  - however if someone now starts iterating back, previous() will call PageListIterator::previous() which will not give the previous page, but the actual one!
-             *  -> Java iterators it.next() == it.previous();
-             * This phenomenon has to be taken care of when calling hasPrevious() next() and previous().
-             * Fortunately, it's not that complicated for hasNext() since we may be on the last page only if iterated forwards (or invoked listIterator() with last page tuples index -
-             * - but this still acts like iterated forwards).
-             */
-            boolean lastPageDirIsForward = true;
-            
-            int currentIdx = 0;
-                        
-            public TupleListIterator() {
-            	pagesIt = pageItWrapper.listIterator(0);
-            	tuplesIt = pagesIt.next().listIterator();
-            	lastPageDirIsForward = true;
-            }
-            
-            public TupleListIterator(int nextIdx, Relation tupleRelation) {            	
-            	//NOTE: if the size of tuples was constant, we could use following code
-            	/* pagesIt = pageItWrapper.listIterator(0);
-            	if (pagesIt.hasNext()) {
-            		Page p = pageItWrapper.listIterator(0).next();
-            		int tupleSize = 0;
-            		if (p.getNumberOfTuples() > 0) {
-            			Tuple t = p.iterator().next();
-            			tupleSize = TupleIOManager.byteSize(tupleRelation, t);
-            			final int tuplesPerPage = Sizes.PAGE_SIZE / tupleSize;
-            			pagesIt = pageItWrapper.listIterator(nextIdx / tuplesPerPage);
-            			p = pagesIt.next();
-            			tuplesIt = p.listIterator(nextIdx % tuplesPerPage);
-            			currentIdx = nextIdx;
-                		lastPageDirIsForward = true;
-            		}
-            		else {
-            			throw new IndexOutOfBoundsException();
-            		}
-            	} */
-
-            	//NOTE: however it's not constant, so we use the following code (bad, since to reach some tuple we need to scan from 0 page)
-            	//size of the tuple is not guaranteed to be constant, so we need to iterate over all pages
-                pagesIt = pageItWrapper.listIterator(0);
-                Page p = pagesIt.next();
-                int tuplesNoInPreviousPages = p.getNumberOfTuples();
-                while (tuplesNoInPreviousPages <= nextIdx && pagesIt.hasNext()) {
-                	p = pagesIt.next();
-                	tuplesNoInPreviousPages += p.getNumberOfTuples();
-                }
-                
-                //we are currently on a page with the proper tuple, or have run out of pages
-                if (tuplesNoInPreviousPages >= nextIdx) {
-                	tuplesIt = p.listIterator(nextIdx - tuplesNoInPreviousPages + p.getNumberOfTuples());
-                	currentIdx = nextIdx;
-                	lastPageDirIsForward = true;
-                }
-                else {
-                	throw new IndexOutOfBoundsException();
-                }
-            }
-            
-        	/**
-        	 * Checks whether there are more tuples in this iterator.
-        	 *
-        	 * @return <code>true</code> if there are more tuples,
-        	 * <code>false</code> otherwise.
-        	 */
-            public boolean hasNext() {
-                return (tuplesIt.hasNext() ||	
-                		pagesIt.hasNext());
-            } // hasNext()
-            
-            public Tuple next() throws NoSuchElementException {
-            	Tuple tuple = null;
-            	try {
-            		tuple = tuplesIt.next();
-            	}
-            	catch (NoSuchElementException e) {
-
-            		lastPageDirIsForward = true;
-
-            		tuplesIt = (ListIterator<Tuple>)pagesIt.next().iterator();
-            		tuple = tuplesIt.next();
-            	}
-            	currentIdx++;
-            	                    
-                return tuple;
-            } // next()
-            
-            public void remove() throws UnsupportedOperationException {
-                throw new UnsupportedOperationException("Cannot remove "
-                                                        + "from tuple "
-                                                        + "iterator.");
-            } // remove()
-			@Override
-			public void add(Tuple arg0) {
-                throw new UnsupportedOperationException("Cannot add to tuple iterator.");
-			}
-			@Override
-			public boolean hasPrevious() {
-				//we don't look at pagesIt.hasPrevious(), since tuplesIt is an iterator 
-				//already in a previous page
-				return (tuplesIt.hasPrevious() ||
-						(lastPageDirIsForward ? pagesIt.previousIndex() > 0 : pagesIt.hasPrevious()));
-			}
-			
-			@Override
-			public int nextIndex() {
-				return currentIdx;
-			}
-			
-			@Override
-			public Tuple previous() {					
-				Tuple tuple = null;
-				try {
-					tuple = tuplesIt.previous();
-				}
-				catch (NoSuchElementException e) {
-					Page page = null;
-					if (lastPageDirIsForward) {
-						pagesIt.previous();
-						lastPageDirIsForward = false;
-					}
-					page = pagesIt.previous();
-					tuplesIt = page.listIterator(page.getNumberOfTuples());
-					tuple = tuplesIt.previous();
-				}
-                --currentIdx;
-                
-                return tuple;
-			}
-			
-			@Override
-			public int previousIndex() {
-				return currentIdx - 1;
-			}
-			
-			@Override
-			public void set(Tuple arg0) {
-				throw new UnsupportedOperationException("Cannot set the tuple with tuple iterator.");
-			}
-        };//TupleListIterator
     } // TupleIteratorWrapper
 
     
@@ -539,138 +363,26 @@ public class RelationIOManager {
             RelationIOManager manager = 
                 new RelationIOManager(sm, relation, filename);
             
-            final int tupleSize = getTestTupleSize(relation, filename);
-            final int tuplesNoPerPage = Sizes.PAGE_SIZE / tupleSize;
+            for (int i = 0; i < 30; i++) {
+                List<Comparable> v = new ArrayList<Comparable>();
+                v.add(new Integer(i));
+                v.add(new String("bla"));
+                Tuple tuple = new Tuple(new TupleIdentifier(filename, i), v);
+                System.out.println("inserting: " + tuple);
+                manager.insertTuple(tuple);
+            }
             
-            int tuplesToWrite = tuplesNoPerPage + 1;
-            
-            //crossing the boundary of 2 pages Pages
-    		writeRelation(filename, manager, tuplesToWrite);
-            testIWholeRelationIteration(filename, manager, tuplesToWrite);
-            testPartialRelationIteration(manager, tuplesToWrite - 2, 2);
-            sm.deleteFile(filename);
-            
-            //test over only one page
-            sm.createFile(filename);
-            tuplesToWrite = tuplesNoPerPage;
-            writeRelation(filename, manager, tuplesToWrite);
-            testIWholeRelationIteration(filename, manager, tuplesToWrite);
-            testPartialRelationIteration(manager, 0, tuplesToWrite);
-            sm.deleteFile(filename);
-            
-            //4 pages, cross middle two
-            sm.createFile(filename);
-            tuplesToWrite = 4 * tuplesNoPerPage;
-            writeRelation(filename, manager, tuplesToWrite);
-            testIWholeRelationIteration(filename, manager, tuplesToWrite);
-            testPartialRelationIteration(manager, 0, tuplesToWrite);
-            sm.deleteFile(filename);
+            System.out.println("Tuples successfully inserted.");
+            System.out.println("Opening tuple cursor...");
 
+            for (Tuple tuple : manager.tuples())
+                System.out.println("read: " + tuple);
+            
         }
         catch (Exception e) {
             System.err.println("Exception: " + e.getMessage());
             e.printStackTrace(System.err);
         }	
     } // main()
-
-	private static void testPartialRelationIteration(RelationIOManager manager,
-			int startIdx, int tuplesToRead) throws IOException,
-			StorageManagerException, UnexpectedException {
-		//iteration from a give point few tuples forth and back
-		System.out.println("Forward and backward list iteration...");
-		TupleIteratorWrapper tiw = (TupleIteratorWrapper)manager.tuples();
-		ListIterator<Tuple> tupleIt = tiw.listIterator(startIdx);
-		HashMap<Tuple, Integer> checkTuples = new HashMap<Tuple, Integer>();
-		Tuple tuple1 = null;
-		for (int i = 0; i < tuplesToRead; ++i) {
-			tuple1 = tupleIt.next();
-			checkTuples.put(tuple1, 1);
-			System.out.print("+");
-		}
-		
-		System.out.println();
-		Integer rmdTupleId = null;
-		while (tupleIt.previousIndex() >= startIdx) {
-			tuple1 = tupleIt.previous();
-			if (! checkTuples.containsKey(tuple1)) {
-				throw new UnexpectedException("Tuple not in a hash while traversing back!");
-			}
-			rmdTupleId = checkTuples.remove(tuple1);
-			System.out.print("-");
-		}
-		//make sure all were deleted
-		if (0 != checkTuples.size()) {
-			throw new UnexpectedException("Some tuples are not removed!");
-		}
-		else {
-			System.out.print("Forward and backward iteration works!");
-		}
-	}
-
-	private static void testIWholeRelationIteration(String filename,
-			RelationIOManager manager, int tuplesTotalNo)
-			throws StorageManagerException, IOException, UnexpectedException {
-		System.out.println("Opening tuple cursor...");
-
-		//forward iteration
-		System.out.println("Forward iteration...");
-		int tuplesFwdRead = 0;
-		for (Tuple tuple : manager.tuples()) {
-		    System.out.print(".");
-		    ++tuplesFwdRead;
-		}
-		
-		if (tuplesFwdRead != tuplesTotalNo) {
-			throw new UnexpectedException("Different number of tuples written and read");
-		}
-		else {
-			System.out.println("Forward iteration (" + tuplesFwdRead + ") OK!");
-		}
-		
-		//backward iteration check
-		System.out.println("Backward iteration...");
-		TupleIteratorWrapper tiw = (TupleIteratorWrapper)manager.tuples();
-		ListIterator<Tuple> bckTupleIt = tiw.listIterator(tuplesTotalNo);
-		int tuplesBckRead = 0;
-		Tuple tuple1 = null;
-		while (bckTupleIt.hasPrevious()) {
-			tuple1 = bckTupleIt.previous();
-			++tuplesBckRead;
-			System.out.print("+");
-		}
-		if (tuplesBckRead != tuplesTotalNo) {
-			throw new UnexpectedException("Different number of tuples written and read in  backward direction!");
-		}
-		else {
-			System.out.println("Backward iteration (" + tuplesFwdRead + ") OK!");
-		}
-	}
-
-	private static int writeRelation(String filename,
-			RelationIOManager manager, int tuplesToWrite)
-			throws StorageManagerException {
-		int tuplesWritten = 0;
-		System.out.println("Inserting...");
-		for (int i = 0; i < tuplesToWrite; i++) {
-		    List<Comparable> v = new ArrayList<Comparable>();
-		    v.add(new Integer(i));
-		    v.add(new String("bla"));
-		    Tuple tuple = new Tuple(new TupleIdentifier(filename, i), v);
-		    System.out.print(".");
-		    manager.insertTuple(tuple);
-		    ++tuplesWritten;
-		}
-		
-		System.out.println("Tuples successfully inserted.");
-		return tuplesWritten;
-	}
-
-	private static int getTestTupleSize(Relation relation, String filename) {
-		List<Comparable> v = new ArrayList<Comparable>();
-		v.add(new Integer(0));
-		v.add(new String("bla"));
-		Tuple tuple = new Tuple(new TupleIdentifier(filename, 0), v);
-		return TupleIOManager.byteSize(relation, tuple);
-	}
     
 } // RelationIOManager
