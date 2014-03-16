@@ -49,14 +49,11 @@ public abstract class SortMerger<T> {
 
 		int ret = -1;//something different than 0, to force first comparison
 		do {
-			if (0 != ret) {
-				ret = comparator.compare(firstValue, secondValue);
-			}
-			else {
+			if (0 == ret) {
 				//values are same - merge them
 				mergeValues(firstValue, secondValue);
 
-				//remember equal-values parameters
+				//remember equal-values group parameters
 				firstGroupStartIdx = firstIt.previousIndex();
 				groupValue = firstValue;
 
@@ -74,7 +71,7 @@ public abstract class SortMerger<T> {
 				}
 				
 				//reached the end of a group, two cases may occur
-				//	- end of the group coincides with end of the input stream (!hasNext() and 0 == cmpRes). Then group is [firstGroupStartIdx, firstIt.nextIndex()] (inclusive)
+				//	- end of the group coincides with end of the input stream (!hasNext() and 0 == cmpRes); then group is [firstGroupStartIdx, firstIt.nextIndex()] (inclusive)
 				//	- otherwise, then group is [firstGroupStartIdx, firstIt.previousIndex()] (inclusive)
 				boolean firstIsDone = !firstIt.hasNext() && 0 == cmpRes;
 				firstGroupLastIdx = firstIsDone ? firstIt.nextIndex() : firstIt.previousIndex();
@@ -101,10 +98,9 @@ public abstract class SortMerger<T> {
 				//if the first input was done and there is nothing in the second one, we are done
 				if (firstIsDone && !secondIt.hasNext()) 
 					break;
-				
-				//one of the vales was changed, perform another comparison
-				ret = comparator.compare(firstValue, secondValue);
 			}
+
+			ret = comparator.compare(firstValue, secondValue);
 		} while (advancePointers(firstIt, secondIt, ret));
 	}
 
