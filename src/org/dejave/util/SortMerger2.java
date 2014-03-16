@@ -8,11 +8,11 @@ import java.util.ListIterator;
 
 public abstract class SortMerger2<T> {
 	public interface MergerBuffer<T> {
-		public void reset();
+		public void reset() throws Exception;
 		
-		public void addValue(T value);
+		public void addValue(T value) throws Exception;
 		
-		public Iterator<T> iterator();
+		public Iterator<T> iterator() throws Exception;
 	} 
 	
 	
@@ -35,9 +35,11 @@ public abstract class SortMerger2<T> {
 	 * @param first - value of the first input;
 	 * @param second - value of the second intput.
 	 */
-	public abstract void mergeValues(T first, T second);
+	public abstract void mergeValues(T first, T second) 
+			throws Exception;
 
-	public void doMerge(ListIterator<T> firstIt, ListIterator<T> secondIt) {
+	public void doMerge(ListIterator<T> firstIt, ListIterator<T> secondIt) 
+			throws Exception {
 		//first and last index of (inclusive) of equal-values group in the first input
 		int firstGroupStartIdx = 0;
 		int firstGroupLastIdx = 0;
@@ -255,8 +257,10 @@ public abstract class SortMerger2<T> {
 
 	/**
 	 * Debug main.
+	 * @throws Exception 
 	 */
-	public static void main (String [] args) {
+	public static void main (String [] args) 
+			throws Exception {
 		int internalBuffersSize[] = {1, 100};
 		
 		//normal case
@@ -304,7 +308,8 @@ public abstract class SortMerger2<T> {
 
 	}//main()
 
-	private static void checkMergeOfArrays(String a[], String b[], int joinsNo, int internalBufferSizes[]) {
+	private static void checkMergeOfArrays(String a[], String b[], int joinsNo, int internalBufferSizes[]) 
+			throws Exception {
 		List<DebugTuple> first = createTupleList(a);
 		List<DebugTuple> second = createTupleList(b);	
 

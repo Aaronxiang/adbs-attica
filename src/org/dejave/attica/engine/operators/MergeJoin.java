@@ -10,25 +10,25 @@
  */
 package org.dejave.attica.engine.operators;
 
-import java.util.List;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Iterator;
-
-import java.io.IOException;
-
-import org.dejave.attica.model.Relation;
+import java.util.List;
 
 import org.dejave.attica.engine.predicates.Predicate;
-import org.dejave.attica.engine.predicates.PredicateEvaluator;
-import org.dejave.attica.engine.predicates.PredicateTupleInserter;
-
+import org.dejave.attica.model.Relation;
+import org.dejave.attica.storage.FileUtil;
 import org.dejave.attica.storage.IntermediateTupleIdentifier;
 import org.dejave.attica.storage.RelationIOManager;
+import org.dejave.attica.storage.Sizes;
 import org.dejave.attica.storage.StorageManager;
 import org.dejave.attica.storage.StorageManagerException;
 import org.dejave.attica.storage.Tuple;
-
-import org.dejave.attica.storage.FileUtil;
+import org.dejave.attica.storage.TupleIOManager;
+import org.dejave.util.ExtensiblePagedList;
+import org.dejave.util.OperatorTuplesListIterator;
+import org.dejave.util.SortMerger2;
+import org.dejave.util.SortMerger2.MergerBuffer;
 
 /**
  * MergeJoin: Implements a merge join. The assumptions are that the
@@ -37,8 +37,13 @@ import org.dejave.attica.storage.FileUtil;
  *
  * @author sviglas
  * 
+ * 
+ * Krzysztow: I removed inheritance from NestedLoopsJoins, since I see no reason to do it (there was also problem with outputFile being shadowed with MergeJoin.outputFile member).
+ * For this to be ok, I alos uncommented MergeJoin::cleanup() method.
+ * 
  */
-public class MergeJoin extends NestedLoopsJoin {
+
+public class MergeJoin extends PhysicalJoin {
 	
     /** The name of the temporary file for the output. */
     private String outputFile;
@@ -70,7 +75,7 @@ public class MergeJoin extends NestedLoopsJoin {
      * @throws EngineException thrown whenever the operator cannot be
      * properly constructed.
      */
-    public MergeJoin(Operator left, 
+	public MergeJoin(Operator left, 
                      Operator right,
                      StorageManager sm,
                      int leftSlot,
@@ -110,6 +115,20 @@ public class MergeJoin extends NestedLoopsJoin {
         outputFile = FileUtil.createTempFileName();
     } // initTempFiles()
 
+    class SingleSlotTupleComparator implements Comparator<Tuple> {
+    	int leftSlot = -1;
+    	int rightSlot = -1;
+    	
+    	public SingleSlotTupleComparator(int lefSlot, int rightSlot) {
+    		this.leftSlot = lefSlot;
+    		this.rightSlot = rightSlot;
+    	}
+    	
+		@Override
+		public int compare(Tuple leftVal, Tuple rightVal) {
+			return leftVal.getValue(leftSlot).compareTo(rightVal.getValue(rightSlot));
+		}
+    }
     
     /**
      * Sets up this merge join operator.
@@ -120,42 +139,42 @@ public class MergeJoin extends NestedLoopsJoin {
     
     @Override
     protected void setup() throws EngineException {
-        try {
-            System.out.println("done");
-            ////////////////////////////////////////////
-            //
-            // YOUR CODE GOES HERE
-            //
-            ////////////////////////////////////////////
-            
-            ////////////////////////////////////////////
-            //
-            // the output should reside in the output file
-            //
-            ////////////////////////////////////////////
+    	PagedListMergerBuffer buffer = null;
+    	try {
+        	Operator leftOperator = getInputOperator(LEFT);
+        	Operator rightOperator = getInputOperator(RIGHT);
+        	Relation relation = leftOperator.getOutputRelation();
+        	StorageManager sm = getStorageManager();        	
 
-            //
-            // you may need to uncomment the following lines if you
-            // have not already instantiated the manager -- it all
-            // depends on how you have implemented the operator
-            //
-            //outputMan = new RelationIOManager(getStorageManager(), 
-            //                                  getOutputRelation(),
-            //                                  outputFile);
-
-            // open the iterator over the output
+    		sm.createFile(outputFile);
+            outputMan = new RelationIOManager(getStorageManager(), 
+                                              getOutputRelation(),
+                                              outputFile);
+        	
+        	OperatorTuplesListIterator leftIt = new OperatorTuplesListIterator(leftOperator);
+        	OperatorTuplesListIterator rightIt = new OperatorTuplesListIterator(rightOperator);
+        	
+        	Comparator<Tuple> comparator = new SingleSlotTupleComparator(leftSlot, rightSlot);
+        	buffer = new PagedListMergerBuffer(
+        			TupleIOManager.byteSize(relation, leftIt.peek()), Sizes.PAGE_SIZE, relation, sm);
+        	
+        	OperatorSortMerger merger = new OperatorSortMerger(comparator, buffer, outputMan);
+        	merger.doMerge(leftIt, rightIt);
+        	
+        	//don't throw exception if cannot remove temporary file, since we did our job and results may be used
+        	try {buffer.cleanup();} catch (EngineException e) {
+        		System.err.println("Cannot clean intermediate file after merge is done!");
+        	}
+        	
             outputTuples = outputMan.tuples().iterator();
         }
-        catch (IOException ioe) {
-            throw new EngineException("Could not create page/tuple iterators.",
-                                      ioe);
-        }
-        catch (StorageManagerException sme) {
-            EngineException ee = new EngineException("Could not store " + 
-                                                     "intermediate relations " +
-                                                     "to files.");
-            ee.setStackTrace(sme.getStackTrace());
-            throw ee;
+        catch (Exception e) {
+        	if (null != buffer) {
+        		try {buffer.cleanup();} catch (Exception e1) {};
+        	}
+        	
+        	
+        	throw new EngineException("Can't do sort merge.", e);
         }
     } // setup()
     
@@ -166,7 +185,6 @@ public class MergeJoin extends NestedLoopsJoin {
      * @throws EngineException whenever the operator cannot clean up
      * after itself.
      */
-    /*
     @Override
     protected void cleanup() throws EngineException {
         try {
@@ -185,7 +203,7 @@ public class MergeJoin extends NestedLoopsJoin {
             throw ee;
         }
     } // cleanup()
-    */
+    
 
     /**
      * Inner method to propagate a tuple.
@@ -229,5 +247,76 @@ public class MergeJoin extends NestedLoopsJoin {
     protected String toStringSingle () {
         return "mj <" + getPredicate() + ">";
     } // toStringSingle()
+    
+    private static class PagedListMergerBuffer implements MergerBuffer<Tuple> {
+		ExtensiblePagedList listBuffer = null;
+
+		public PagedListMergerBuffer(int tupleSize, int pageSize, Relation rel, StorageManager sm) 
+				throws EngineException, StorageManagerException {
+        	String arrayListFile = FileUtil.createTempFileName();
+        	sm.createFile(arrayListFile);
+			listBuffer = new ExtensiblePagedList(tupleSize, pageSize, rel, sm, arrayListFile);
+		}
+
+		@Override
+		public void reset() 
+				throws Exception {
+			listBuffer.reset();
+		}
+
+		@Override
+		public void addValue(Tuple value) 
+				throws Exception {
+			listBuffer.addTuple(value);
+		}
+
+		@Override
+		public Iterator<Tuple> iterator() 
+				throws Exception {
+			return listBuffer.iterator();
+		}
+
+		public void cleanup() 
+				throws EngineException {
+			if (null != listBuffer)
+				listBuffer.cleanup();
+		}
+	}
+    
+    public class OperatorSortMerger extends SortMerger2<Tuple> {
+    	private RelationIOManager manager = null;
+    	
+    	public OperatorSortMerger(Comparator<Tuple> comparator, SortMerger2.MergerBuffer<Tuple> buffer, RelationIOManager manager) {
+    		super(comparator, buffer);
+    		this.manager = manager;
+    	}
+
+		@Override
+    	public void mergeValues(Tuple first, Tuple second) 
+    			throws Exception {
+    		Tuple combinedTuple = combineTuples(first, second);
+    		try {
+				manager.insertTuple(combinedTuple);
+			} catch (StorageManagerException e) {
+				throw new Exception("Can't insert merged tuples.", e);
+			}
+    	}
+		
+	    /**
+	     * Copied from NestedLoopsJoin
+	     * Given two tuples, combine them into a single one.
+	     * 
+	     * @param left the left tuple.
+	     * @param right the right tuple.
+	     * @return a new tuple with the left and right tuples combined.
+	     */    
+	    protected Tuple combineTuples(Tuple left, Tuple right) {
+	        List<Comparable> v = new ArrayList<Comparable>();
+	        v.addAll(left.getValues());
+	        v.addAll(right.getValues());
+	        return new Tuple(new IntermediateTupleIdentifier(tupleCounter++), v);
+	    } // combineTuples()
+
+    }
 
 } // MergeJoin

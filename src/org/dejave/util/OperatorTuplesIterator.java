@@ -1,5 +1,8 @@
 package org.dejave.util;
 
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+
 import org.dejave.attica.engine.operators.EndOfStreamTuple;
 import org.dejave.attica.engine.operators.EngineException;
 import org.dejave.attica.engine.operators.Operator;
@@ -14,7 +17,7 @@ import org.dejave.attica.storage.Tuple;
  * @author krzys
  * 
  */
-public class OperatorTuplesIterator /* implements Iterator<Tuple> */{
+public class OperatorTuplesIterator implements Iterator<Tuple> {
 	private Tuple lastTuple = null;
 	private boolean hasNxt = false;
 	private Operator op = null;
@@ -36,18 +39,21 @@ public class OperatorTuplesIterator /* implements Iterator<Tuple> */{
 	/**
 	 * Polls for a next tuple and returns new result.
 	 * @return
-	 * @throws EngineException
 	 */
-	public Tuple next() throws EngineException {
+	public Tuple next() {
 		Tuple t = lastTuple;
 		// iterate until non-null tuple is gotten
 		// !NOTE: why does the tuple may be null?
-		while (true) {
-			lastTuple = op.getNext();
-			if (null != lastTuple) {
-				hasNxt = !(lastTuple instanceof EndOfStreamTuple);
-				break;
+		try {
+			while (true) {
+				lastTuple = op.getNext();
+				if (null != lastTuple) {
+					hasNxt = !(lastTuple instanceof EndOfStreamTuple);
+					break;
+				}
 			}
+		} catch (EngineException e) {
+			throw new NoSuchElementException("Cannot retrieve next tuple from operator.");
 		}
 		return t;
 	}
@@ -58,5 +64,10 @@ public class OperatorTuplesIterator /* implements Iterator<Tuple> */{
 	 */
 	public Tuple peek() {
 		return lastTuple;
+	}
+
+	@Override
+	public void remove() {
+		throw new UnsupportedOperationException("Cannot remove tuple from operator.");
 	}
 }
