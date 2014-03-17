@@ -42,6 +42,8 @@ import org.dejave.util.SortMerger2.MergerBuffer;
  * How algorithm works is explained in {@link SortMerger2::doMerge()}. There were few options I chose from:
  * - without any additional buffer, but then Operator::tuples()::iterators() would have to be both-direction (next() & previous()). These seems like not the correct way, since would require architectural changes
  * 	and I have a feeling wouldn't work well with some of the operators. If it was possible, one could use {@link SortMerger} class.
+ *  (if we had access to the intermediate files (after the sort phase), we could modify tuples() and pages() iterators (as in RelationalIOManager2.java and Page2.java (the test in Main() in RelationalIOManager2.java works))
+ * 	and then work one these files directly - however I didn't do that, since it breaks cohesion and is a hack).
  * - with additional buffer:
  *  The buffer is needed, since once we read tuple from Operator it cannot be re-read (which is necessary for joining with potential next tuple from second input). This had two options:
  * 	- buffering the group of equivalent tuples in a first group in list - not good, since we have no control over the memory consumption;
