@@ -101,6 +101,8 @@ public abstract class SortMerger2<T> {
 			if (0 == ret) {
 				//values are same - merge them and begin filling the buffer
 				mergeValues(firstValue, secondValue);
+				//note: reset the buffer and add to it could be done lazily - only if the group contains more than one element (in a while(firstIt.hasNext()) loop, additional flag needed)
+				//for my test cases I saw no significant difference. And the clarity of code got even worse.  
 				buffer.reset();
 				buffer.addValue(firstValue);
 				
