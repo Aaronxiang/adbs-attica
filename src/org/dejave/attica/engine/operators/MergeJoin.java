@@ -41,7 +41,7 @@ import org.dejave.util.SortMerger2.MergerBuffer;
  * The class implemenets a merge join algorithm, which execution takes place in few classes: OperatorSortMerger (inheriting from SortMerger2) with ExtensiblePagedList (wrapped in PagedListMergerBuffer) used as buffer.
  * How algorithm works is explained in {@link SortMerger2::doMerge()}. There were few options I chose from:
  * - without any additional buffer, but then Operator::tuples()::iterators() would have to be both-direction (next() & previous()). These seems like not the correct way, since would require architectural changes
- * 	and I have a feeling wouldn't work well with some of the operators;
+ * 	and I have a feeling wouldn't work well with some of the operators. If it was possible, one could use {@link SortMerger} class.
  * - with additional buffer:
  *  The buffer is needed, since once we read tuple from Operator it cannot be re-read (which is necessary for joining with potential next tuple from second input). This had two options:
  * 	- buffering the group of equivalent tuples in a first group in list - not good, since we have no control over the memory consumption;
@@ -49,7 +49,12 @@ import org.dejave.util.SortMerger2.MergerBuffer;
  * 		* the number of tuples in a group is larger than the one that fits into one page;
  * 		* we are so unfortunate that StorageManager evicted already a page - not so likely, since we are localized (in time) with page usage (and SM has LRU algorithm).
  * 
- * I removed inheritance from NestedLoopsJoins, since I see no reason to do it (there was also problem with outputFile being shadowed with MergeJoin.outputFile member) + uncommented MergeJoin::cleanup() method.
+ * Note: I don't use {@link Predicate} and {@link PredicateEvaluator} classes, since their fucntionality is contained within SingleSlotTupleComparator. It's not a limitation, since:
+ * - comparator is more general - not only returns true/false but also the type of relation (smaller/larger);
+ * - MergeJoin is used for only equi-joins - even if it wasn't, then we would have problems with sorting and comparing tuples according to predicate (so if 
+ * 		ever it's going to change to other joins, not only this would have to be modified);
+ * 
+ * Note2: I removed inheritance from NestedLoopsJoins, since I see no reason to do it (there was also problem with outputFile being shadowed with MergeJoin.outputFile member) + uncommented MergeJoin::cleanup() method.
  */
 
 public class MergeJoin extends PhysicalJoin {
@@ -161,11 +166,6 @@ public class MergeJoin extends PhysicalJoin {
         	OperatorTuplesIterator rightIt = new OperatorTuplesIterator(rightOperator);
         	
         	//create comparator
-        	//NOTE: I don't use predicate evaluator, since Tuple evaluator since:
-        	// - comparator is more general - not only returns true/false but also the type of relation (smaller/larger);
-        	// - MergeJoin is used for only equi-joins;
-        	// - it's not less general since we need to sort according to the needed slots which are only two (and that sort
-        	// has to be related with predicate). 
         	Comparator<Tuple> comparator = new SingleSlotTupleComparator(leftSlot, rightSlot);
         	//buffer for keeping groups of equivalent tuples
         	buffer = new PagedListMergerBuffer(
