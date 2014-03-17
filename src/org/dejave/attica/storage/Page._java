@@ -26,7 +26,7 @@ import org.dejave.util.Convert;
  *
  * @author sviglas
  */
-public class Page2 implements Iterable<Tuple> {
+public class Page implements Iterable<Tuple> {
     
     /** The tuples of this page. */
     private List<Tuple> tuples;
