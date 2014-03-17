@@ -106,12 +106,6 @@ public class MergeJoin extends PhysicalJoin {
      * files cannot be initialised.
      */
     protected void initTempFiles() throws StorageManagerException {
-        ////////////////////////////////////////////
-        //
-        // initialise the temporary files here
-        // make sure you throw the right exception
-        //
-        ////////////////////////////////////////////
         outputFile = FileUtil.createTempFileName();
     } // initTempFiles()
 
@@ -141,20 +135,30 @@ public class MergeJoin extends PhysicalJoin {
     protected void setup() throws EngineException {
     	PagedListMergerBuffer buffer = null;
     	try {
+    		//section of what is given
         	Operator leftOperator = getInputOperator(LEFT);
         	Operator rightOperator = getInputOperator(RIGHT);
         	Relation relation = leftOperator.getOutputRelation();
         	StorageManager sm = getStorageManager();        	
 
+        	//create a output file and its manager for a merger
     		sm.createFile(outputFile);
             outputMan = new RelationIOManager(getStorageManager(), 
                                               getOutputRelation(),
                                               outputFile);
         	
+            //tuples iterators wrappers that are more easy for me (probably overhead doesn't matter)
         	OperatorTuplesListIterator leftIt = new OperatorTuplesListIterator(leftOperator);
         	OperatorTuplesListIterator rightIt = new OperatorTuplesListIterator(rightOperator);
         	
+        	//create comparator
+        	//NOTE: I don't use predicate evaluator, since Tuple evaluator since:
+        	// - comparator is more general - not only returns true/false but also the type of relation (smaller/larger);
+        	// - MergeJoin is used for only equi-joins;
+        	// - it's not less general since we need to sort according to the needed slots which are only two (and that sort
+        	// has to be related with predicate). 
         	Comparator<Tuple> comparator = new SingleSlotTupleComparator(leftSlot, rightSlot);
+        	//buffer for keeping groups of equivalent tuples
         	buffer = new PagedListMergerBuffer(
         			TupleIOManager.byteSize(relation, leftIt.peek()), Sizes.PAGE_SIZE, relation, sm);
         	
@@ -248,9 +252,16 @@ public class MergeJoin extends PhysicalJoin {
         return "mj <" + getPredicate() + ">";
     } // toStringSingle()
     
+    /**
+     * Implementation of the list-like MergeBuffer which is backed up with 
+     * ExtensiblePagedList buffer.
+     * For descriptions of what is expected from methods, see MergerBuffer.
+     * @author krzysztow
+     *
+     */
     private static class PagedListMergerBuffer implements MergerBuffer<Tuple> {
 		ExtensiblePagedList listBuffer = null;
-
+		
 		public PagedListMergerBuffer(int tupleSize, int pageSize, Relation rel, StorageManager sm) 
 				throws EngineException, StorageManagerException {
         	String arrayListFile = FileUtil.createTempFileName();
@@ -258,24 +269,36 @@ public class MergeJoin extends PhysicalJoin {
 			listBuffer = new ExtensiblePagedList(tupleSize, pageSize, rel, sm, arrayListFile);
 		}
 
+		/**
+		 * Resets the underlying buffer structure.
+		 */
 		@Override
 		public void reset() 
 				throws Exception {
 			listBuffer.reset();
 		}
 
+		/**
+		 * Adds value to the end of the buffer.
+		 */
 		@Override
 		public void addValue(Tuple value) 
 				throws Exception {
 			listBuffer.addTuple(value);
 		}
 
+		/**
+		 * Iterator over entire buffer.
+		 */
 		@Override
 		public Iterator<Tuple> iterator() 
 				throws Exception {
 			return listBuffer.iterator();
 		}
 
+		/*
+		 * Cleans up allocate resources for a buffer
+		 */
 		public void cleanup() 
 				throws EngineException {
 			if (null != listBuffer)
@@ -283,6 +306,11 @@ public class MergeJoin extends PhysicalJoin {
 		}
 	}
     
+    /**
+     * Concrete SortMerger2 that merges two sorted Tuples inputs into the output relation.
+     * @author krzysztow
+     *
+     */
     public class OperatorSortMerger extends SortMerger2<Tuple> {
     	private RelationIOManager manager = null;
     	

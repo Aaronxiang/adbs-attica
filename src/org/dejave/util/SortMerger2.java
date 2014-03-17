@@ -7,11 +7,32 @@ import java.util.List;
 import java.util.ListIterator;
 
 public abstract class SortMerger2<T> {
+	
+	/**
+	 * Class used by SortMerger2 when calculating the merge of two input iterators.
+	 * @author krzysztow
+	 */
 	public interface MergerBuffer<T> {
+		/**
+		 * Resets the buffer to the initial state. May be invoked many times. 
+		 * After method gets called, iterator() should return no T values and
+		 * space made for new values inserted with addValues().
+		 * @throws Exception when something wrong happens.
+		 */
 		public void reset() throws Exception;
 		
+		/**
+		 * Adds new value in a stack manner to the buffer. 
+		 * @param value value to be added.
+		 * @throws Exception when something wrong happens.
+		 */
 		public void addValue(T value) throws Exception;
 		
+		/**
+		 * Returns iterator to iterate over entire buffer.
+		 * @return iterator
+		 * @throws Exception when something wrong happens.
+		 */
 		public Iterator<T> iterator() throws Exception;
 	} 
 	
@@ -22,7 +43,8 @@ public abstract class SortMerger2<T> {
 	T secondValue = null;
 	
 	/**
-	 * Constructs new merger with a given comparator.
+	 * Constructs new merger with a given comparator and buffer to be 
+	 * used during merge process.
 	 * @param comparator
 	 */
 	public SortMerger2(Comparator<T> comparator, MergerBuffer<T> buffer) {
@@ -31,13 +53,31 @@ public abstract class SortMerger2<T> {
 	}
 
 	/**
-	 * Invoked when there are two values from different inputs to be merged.
-	 * @param first - value of the first input;
-	 * @param second - value of the second intput.
+	 * Invoked when there are two values from the inputs given to SortMerger2::doMerge() to me merged.
+	 * @param first - value of the firstIt iterator;
+	 * @param second - value of the secondIt iterator.
 	 */
 	public abstract void mergeValues(T first, T second) 
 			throws Exception;
 
+	/**
+	 * Method that merges <b>sorted</b> lists with use of comparator given in a constructor. Whenever
+	 * comparator returns 0 (values are equal), values are to be merged with {@link SortMerger2::mergeValues()}
+	 * 
+	 * Method compares two input iterator values:
+	 * - if they are different, advances the smaller one;
+	 * - otherwise:
+	 * 		1) fixes on the second input and assumes the first input consists of a group of consecutive equal values. While
+	 * 		iterating that grouop (until the different value is found) it merges with the fixed second value and stores iterated
+	 * 		tuples to the buffer;
+	 * 		2) when done, starts iterating over the second input until the different one (comparing to the group input) is found;
+	 * 		for each equal value, it merges it with all the buffered elements of the first input group.
+	 *	@note: To what I could check, this method uses minimal number of comparator.compare() calls possible. 
+	 *
+	 * @param firstIt - iterator to the first sorted input;
+	 * @param secondIt - iterator to the second sorted input;
+	 * @throws Exception thrown whenever something wrong happens.
+	 */
 	public void doMerge(ListIterator<T> firstIt, ListIterator<T> secondIt) 
 			throws Exception {
 		//first and last index of (inclusive) of equal-values group in the first input
@@ -57,9 +97,8 @@ public abstract class SortMerger2<T> {
 		int ret = -1;//something different than 0, to force first comparison
 		do {
 			if (0 == ret) {
-				//values are same - merge them - begin merge
+				//values are same - merge them and begin filling the buffer
 				mergeValues(firstValue, secondValue);
-				
 				buffer.reset();
 				buffer.addValue(firstValue);
 				
@@ -68,7 +107,7 @@ public abstract class SortMerger2<T> {
 				groupValue = firstValue;
 				
 				int cmpRes = 0;
-				//iterate over the first tuples until the different one is found
+				//iterate over the first tuples until the different one is found (fixed on the second input)
 				while (firstIt.hasNext()) {
 					firstValue = firstIt.next();
 					cmpRes = comparator.compare(firstValue, groupValue);
@@ -115,16 +154,24 @@ public abstract class SortMerger2<T> {
 		} while (advancePointers(firstIt, secondIt, ret));
 	}
 
-	private boolean advancePointers(ListIterator<T> firstIt, ListIterator<T> secondIt, int ret) {
-		//if values different, increment smaller one, unless its input is finished - then we're done too
-		if (ret < 0) {
+	/**
+	 * Advance one of the iterators, depending on a comparisRes.
+	 * @param firstIt first iterator to be potentially advanced;
+	 * @param secondIt second iterator to be potentially advanced.
+	 * @param comparisRes if (copmarisRes > 0), secondIt is advanced, if (comparisRes < 0) firstIt. If equals 0, none.
+	 * @return true if we are done (when smallest element is in one of the inputs - no reason to iterate further, since we have sorted intput).
+	 */
+	private boolean advancePointers(ListIterator<T> firstIt, ListIterator<T> secondIt, int comparisRes) {
+		//if values different, increment smaller one, unless its input is finished
+		//comparisRes may be 0, which means after the old equivalent groups we have another one, don't advance!
+		if (comparisRes < 0) {
 			if (firstIt.hasNext()) {
 				firstValue = firstIt.next();
 			}
 			else 
 				return false;
 		}
-		else if (ret > 0) {
+		else if (comparisRes > 0) {
 			if (secondIt.hasNext())
 				secondValue = secondIt.next();
 			else
@@ -139,7 +186,7 @@ public abstract class SortMerger2<T> {
 	 * ########################################
 	 */
 
-	//class which allows strings to be distinguished with idx
+	//class which allows strings to be distinguished with idx- good for visual debugger
 	static class DebugTuple {
 		String s;
 		Integer idx;
@@ -164,6 +211,7 @@ public abstract class SortMerger2<T> {
 			return v0.s.compareTo(v1.s);
 		}
 		
+		//debugging method, to see how many comparisons we did
 		public int lastCmpCnt() {
 			int tmp = cmpCnt;
 			cmpCnt = 0;
@@ -171,8 +219,18 @@ public abstract class SortMerger2<T> {
 		}
 	}
 
-	//
+	/**
+	 * SortMerger2 implementation for debugging purposes. Merged results are sored as a String for visual comparison.
+	 * @author krzysztow
+	 *
+	 */
 	public static class DebugTupleSortMerger extends SortMerger2<DebugTuple> {
+		/**
+		 * The class used as a buffer of SortMerger2 for DebugTuples. It is overcomplicated but it is so for a reason -
+		 * - I implemented this one first and then knew what should be included when implementing ExtensiblePagedList
+		 * @author krzysztow
+		 *
+		 */
 		static class DebugTupleMergerBuffer implements MergerBuffer<DebugTuple> {
 			DebugTuple buffer[] = null;
 			int size = 0;
@@ -195,6 +253,10 @@ public abstract class SortMerger2<T> {
 				buffer = newBuffer;
 			}
 			
+			/**
+			 * Adds value at  the end of a list, if no more space, creates new array (of size larger by 1 than the previous)
+			 * and copies elements to it, plus input value.
+			 */
 			@Override
 			public void addValue(DebugTuple value) {
 				if (size >= buffer.length) {
