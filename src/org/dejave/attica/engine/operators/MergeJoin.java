@@ -26,7 +26,7 @@ import org.dejave.attica.storage.StorageManagerException;
 import org.dejave.attica.storage.Tuple;
 import org.dejave.attica.storage.TupleIOManager;
 import org.dejave.util.ExtensiblePagedList;
-import org.dejave.util.OperatorTuplesListIterator;
+import org.dejave.util.OperatorTuplesIterator;
 import org.dejave.util.SortMerger2;
 import org.dejave.util.SortMerger2.MergerBuffer;
 
@@ -36,11 +36,20 @@ import org.dejave.util.SortMerger2.MergerBuffer;
  * evaluated is an equi-join.
  *
  * @author sviglas
+ *
+ * Krzysztow: 
+ * The class implemenets a merge join algorithm, which execution takes place in few classes: OperatorSortMerger (inheriting from SortMerger2) with ExtensiblePagedList (wrapped in PagedListMergerBuffer) used as buffer.
+ * How algorithm works is explained in {@link SortMerger2::doMerge()}. There were few options I chose from:
+ * - without any additional buffer, but then Operator::tuples()::iterators() would have to be both-direction (next() & previous()). These seems like not the correct way, since would require architectural changes
+ * 	and I have a feeling wouldn't work well with some of the operators;
+ * - with additional buffer:
+ *  The buffer is needed, since once we read tuple from Operator it cannot be re-read (which is necessary for joining with potential next tuple from second input). This had two options:
+ * 	- buffering the group of equivalent tuples in a first group in list - not good, since we have no control over the memory consumption;
+ * 	- buffering those tuples in a attica Page, which whenever filled is flushed to disk. This ensures we use no more than one in-memory page and in fact hurts performance only if:	
+ * 		* the number of tuples in a group is larger than the one that fits into one page;
+ * 		* we are so unfortunate that StorageManager evicted already a page - not so likely, since we are localized (in time) with page usage (and SM has LRU algorithm).
  * 
- * 
- * Krzysztow: I removed inheritance from NestedLoopsJoins, since I see no reason to do it (there was also problem with outputFile being shadowed with MergeJoin.outputFile member).
- * For this to be ok, I alos uncommented MergeJoin::cleanup() method.
- * 
+ * I removed inheritance from NestedLoopsJoins, since I see no reason to do it (there was also problem with outputFile being shadowed with MergeJoin.outputFile member) + uncommented MergeJoin::cleanup() method.
  */
 
 public class MergeJoin extends PhysicalJoin {
@@ -148,8 +157,8 @@ public class MergeJoin extends PhysicalJoin {
                                               outputFile);
         	
             //tuples iterators wrappers that are more easy for me (probably overhead doesn't matter)
-        	OperatorTuplesListIterator leftIt = new OperatorTuplesListIterator(leftOperator);
-        	OperatorTuplesListIterator rightIt = new OperatorTuplesListIterator(rightOperator);
+        	OperatorTuplesIterator leftIt = new OperatorTuplesIterator(leftOperator);
+        	OperatorTuplesIterator rightIt = new OperatorTuplesIterator(rightOperator);
         	
         	//create comparator
         	//NOTE: I don't use predicate evaluator, since Tuple evaluator since:

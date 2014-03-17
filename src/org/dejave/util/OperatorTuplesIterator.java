@@ -11,10 +11,8 @@ import org.dejave.attica.storage.Tuple;
 /**
  * Iterator-like wrapper to go over the tuples pulled from Operator.
  * It encapsulates Operator behaviour of possible return of null (discard) and EOF tuple (done).
- * NOTE: It doesn't implement Iterator interface, since on next() invocation exception could be thrown, 
- * which is not possible with iterators.
  * 
- * @author krzys
+ * @author krzysztow
  * 
  */
 public class OperatorTuplesIterator implements Iterator<Tuple> {

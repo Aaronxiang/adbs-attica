@@ -84,7 +84,7 @@ public abstract class SortMerger<T> {
 						if (firstGroupStartIdx == firstGroupLastIdx ) {//no need to create iterator
 							mergeValues(groupValue, secondValue);
 						}
-						else {//more items in a group to iterate
+						else {//more items in a group to iterate, thus iterator is needed
 							ListIterator<T> fIt = createFirstIteratorAt(firstGroupStartIdx);
 							while (fIt.nextIndex() < firstGroupLastIdx) {
 								mergeValues(fIt.next(), secondValue);

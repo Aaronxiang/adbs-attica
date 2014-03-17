@@ -41,6 +41,7 @@ public abstract class SortMerger2<T> {
 	MergerBuffer<T> buffer = null;
 	T firstValue = null;
 	T secondValue = null;
+	int firstIteratorIdx = 0;
 	
 	/**
 	 * Constructs new merger with a given comparator and buffer to be 
@@ -68,7 +69,7 @@ public abstract class SortMerger2<T> {
 	 * - if they are different, advances the smaller one;
 	 * - otherwise:
 	 * 		1) fixes on the second input and assumes the first input consists of a group of consecutive equal values. While
-	 * 		iterating that grouop (until the different value is found) it merges with the fixed second value and stores iterated
+	 * 		iterating that group (until the different value is found) it merges with the fixed second value and stores iterated
 	 * 		tuples to the buffer;
 	 * 		2) when done, starts iterating over the second input until the different one (comparing to the group input) is found;
 	 * 		for each equal value, it merges it with all the buffered elements of the first input group.
@@ -78,11 +79,12 @@ public abstract class SortMerger2<T> {
 	 * @param secondIt - iterator to the second sorted input;
 	 * @throws Exception thrown whenever something wrong happens.
 	 */
-	public void doMerge(ListIterator<T> firstIt, ListIterator<T> secondIt) 
+	public void doMerge(Iterator<T> firstIt, Iterator<T> secondIt) 
 			throws Exception {
 		//first and last index of (inclusive) of equal-values group in the first input
 		int firstGroupStartIdx = 0;
 		int firstGroupLastIdx = 0;
+		firstIteratorIdx = 0;
 		//value of the equal-values group
 		T groupValue = null;
 		
@@ -103,13 +105,14 @@ public abstract class SortMerger2<T> {
 				buffer.addValue(firstValue);
 				
 				//remember equal-values group parameters
-				firstGroupStartIdx = firstIt.previousIndex();
+				firstGroupStartIdx = firstIteratorIdx;
 				groupValue = firstValue;
 				
 				int cmpRes = 0;
 				//iterate over the first tuples until the different one is found (fixed on the second input)
 				while (firstIt.hasNext()) {
-					firstValue = firstIt.next();
+					firstValue = firstIt.next(); 
+					++firstIteratorIdx;
 					cmpRes = comparator.compare(firstValue, groupValue);
 					if (0 == cmpRes) {
 						//we are still in an equal-values group -> second tuple is also equal to current first input, thus merge
@@ -123,8 +126,8 @@ public abstract class SortMerger2<T> {
 				//reached the end of a group, two cases may occur
 				//	- end of the group coincides with end of the input stream (!hasNext() and 0 == cmpRes); then group is [firstGroupStartIdx, firstIt.nextIndex()] (inclusive)
 				//	- otherwise, then group is [firstGroupStartIdx, firstIt.previousIndex()] (inclusive)
-				boolean firstIsDone = !firstIt.hasNext() && 0 == cmpRes;
-				firstGroupLastIdx = firstIsDone ? firstIt.nextIndex() : firstIt.previousIndex();
+				final boolean firstIsDone = !firstIt.hasNext() && 0 == cmpRes;
+				firstGroupLastIdx = firstIsDone ? firstIteratorIdx : firstIteratorIdx + 1;
 				
 				while (secondIt.hasNext()) {
 					secondValue = secondIt.next();
@@ -132,6 +135,7 @@ public abstract class SortMerger2<T> {
 					cmpRes = comparator.compare(groupValue, secondValue);
 					if (0 == cmpRes) {
 						if (firstGroupStartIdx == firstGroupLastIdx ) {//no need to create iterator
+							//note: it's not a bug - groupValue==firstValue - so we can do that
 							mergeValues(groupValue, secondValue);
 						}
 						else {//more items in a group to iterate, thus iterator is needed
@@ -161,12 +165,13 @@ public abstract class SortMerger2<T> {
 	 * @param comparisRes if (copmarisRes > 0), secondIt is advanced, if (comparisRes < 0) firstIt. If equals 0, none.
 	 * @return true if we are done (when smallest element is in one of the inputs - no reason to iterate further, since we have sorted intput).
 	 */
-	private boolean advancePointers(ListIterator<T> firstIt, ListIterator<T> secondIt, int comparisRes) {
+	private boolean advancePointers(Iterator<T> firstIt, Iterator<T> secondIt, int comparisRes) {
 		//if values different, increment smaller one, unless its input is finished
 		//comparisRes may be 0, which means after the old equivalent groups we have another one, don't advance!
 		if (comparisRes < 0) {
 			if (firstIt.hasNext()) {
 				firstValue = firstIt.next();
+				++firstIteratorIdx;
 			}
 			else 
 				return false;
